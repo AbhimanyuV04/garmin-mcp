@@ -29,6 +29,21 @@ export const hours = (seconds: number) => round(seconds / 3600, 2);
 export const pct = (part: number, whole: number) =>
   whole > 0 ? round((part / whole) * 100) : undefined;
 
+/**
+ * Sleep timestamps arrive as epoch milliseconds. Garmin's `*Local` variants are
+ * pre-shifted so that reading them as UTC yields local wall time, so the "Z"
+ * from toISOString would be a lie — drop it and match the "YYYY-MM-DD HH:mm"
+ * format the activity endpoints already use.
+ */
+export const localFromEpoch = (ms: number | null | undefined) =>
+  typeof ms === 'number' && ms > 0
+    ? new Date(ms).toISOString().slice(0, 16).replace('T', ' ')
+    : undefined;
+
+/** Garmin floats carry binary noise (3.0999999046325684); trim on the way out. */
+export const num = (n: unknown, places = 1) =>
+  typeof n === 'number' && Number.isFinite(n) ? round(n, places) : undefined;
+
 export const km = (meters: number | null | undefined) =>
   typeof meters === 'number' ? round(meters / 1000, 2) : undefined;
 

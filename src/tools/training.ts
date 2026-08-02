@@ -38,6 +38,18 @@ const TARGET_TYPES = {
   'pace.zone': 6
 } as const;
 
+// Garmin reports training status as an integer code with no label attached.
+const TRAINING_STATUS_LABELS: Record<number, string> = {
+  0: 'No Status',
+  1: 'Detraining',
+  2: 'Recovery',
+  3: 'Maintaining',
+  4: 'Productive',
+  5: 'Peaking',
+  6: 'Overreaching',
+  7: 'Unproductive'
+};
+
 const targetSchema = z.object({
   type: z
     .enum(['no.target', 'heart.rate.zone', 'power.zone', 'pace.zone', 'cadence'])
@@ -158,17 +170,29 @@ export function registerTrainingTools(server: McpServer): void {
         status.mostRecentTrainingLoadBalance?.metricsTrainingLoadBalanceDTOMap
       );
       const load = latest?.acuteTrainingLoadDTO ?? {};
-      const vo2 = Array.isArray(maxMet) ? maxMet[0] : maxMet;
+      // VO2 max and fitness age ride along in the training status payload. The
+      // maxmet endpoint returns [] on this account and the fitnessage service
+      // carries only the inputs, so neither is a reliable primary source.
+      const vo2 = status.mostRecentVO2Max ?? (Array.isArray(maxMet) ? maxMet[0] : maxMet);
+      const code = latest?.trainingStatus;
 
       return text(
         compact({
           date: day,
-          training_status: latest?.trainingStatus,
+          training_status: typeof code === 'number' ? TRAINING_STATUS_LABELS[code] ?? code : code,
+          training_status_code: typeof code === 'number' ? code : undefined,
           training_status_feedback: latest?.trainingStatusFeedbackPhrase,
-          fitness_age: fitnessAge?.chronologicalAge != null ? fitnessAge.fitnessAge : undefined,
+          training_paused: latest?.trainingPaused,
+          fitness_age: vo2?.generic?.fitnessAge ?? fitnessAge?.fitnessAge,
           chronological_age: fitnessAge?.chronologicalAge,
+          resting_heart_rate_bpm: fitnessAge?.components?.rhr?.value,
+          bmi: fitnessAge?.components?.bmi?.value,
           vo2_max_running: vo2?.generic?.vo2MaxPreciseValue ?? vo2?.generic?.vo2MaxValue,
           vo2_max_cycling: vo2?.cycling?.vo2MaxPreciseValue ?? vo2?.cycling?.vo2MaxValue,
+          vo2_max_measured_date: vo2?.generic?.calendarDate,
+          fitness_trend: latest?.fitnessTrend,
+          load_level_trend: latest?.loadLevelTrend,
+          primary_sport: latest?.sport,
           acute_load: load.dailyTrainingLoadAcute ?? load.acuteTrainingLoad,
           chronic_load: load.dailyTrainingLoadChronic ?? load.chronicTrainingLoad,
           // Garmin's optimal band is roughly 0.8-1.5; above that is overreaching.
@@ -253,18 +277,17 @@ export function registerTrainingTools(server: McpServer): void {
       const speedEntry = latest(ltSpeed);
       const speedMs = speedEntry?.value ?? speedEntry?.lactateThresholdSpeed;
 
+      // Garmin models seven power zones and names the boundaries zoneNFloor.
       const zones = Array.isArray(powerZones)
         ? powerZones
-            .filter((z: any) => z?.sport === 'CYCLING' || z?.sport == null)
+            .filter((z: any) => z?.sport === 'CYCLING')
             .map((z: any) =>
               compact({
                 sport: z.sport,
-                zone_1_start_watts: z.zone1Start ?? z.zoneOneStart,
-                zone_2_start_watts: z.zone2Start ?? z.zoneTwoStart,
-                zone_3_start_watts: z.zone3Start ?? z.zoneThreeStart,
-                zone_4_start_watts: z.zone4Start ?? z.zoneFourStart,
-                zone_5_start_watts: z.zone5Start ?? z.zoneFiveStart,
-                ftp_watts: z.functionalThresholdPower
+                ftp_watts: z.functionalThresholdPower,
+                zone_floors_watts: [1, 2, 3, 4, 5, 6, 7]
+                  .map((n) => z[`zone${n}Floor`])
+                  .filter((w: unknown) => typeof w === 'number')
               })
             )
         : [];

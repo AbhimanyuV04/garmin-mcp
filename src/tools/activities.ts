@@ -4,7 +4,18 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { api, apiDownload, apiPut } from '../garmin';
-import { compact, defineTool, hms, km, kmh, paceMinPerKm, problem, round, text } from './common';
+import {
+  compact,
+  defineTool,
+  hms,
+  km,
+  kmh,
+  num,
+  paceMinPerKm,
+  problem,
+  round,
+  text
+} from './common';
 
 // Coerced because MCP clients routinely send numeric ids as strings, and the
 // value is interpolated into a URL and a filename.
@@ -121,10 +132,10 @@ export function registerActivityTools(server: McpServer): void {
           distance_km: km(lap.distance),
           duration: hms(lap.duration),
           ...speedFields(sport, lap.averageSpeed),
-          avg_heart_rate_bpm: lap.averageHR,
-          max_heart_rate_bpm: lap.maxHR,
-          elevation_gain_m: lap.elevationGain != null ? round(lap.elevationGain) : undefined,
-          avg_power_watts: lap.averagePower
+          avg_heart_rate_bpm: num(lap.averageHR, 0),
+          max_heart_rate_bpm: num(lap.maxHR, 0),
+          elevation_gain_m: num(lap.elevationGain, 0),
+          avg_power_watts: num(lap.averagePower)
         })
       );
 
@@ -142,17 +153,17 @@ export function registerActivityTools(server: McpServer): void {
           max_speed_kmh: kmh(s.maxSpeed),
           avg_heart_rate_bpm: s.averageHR,
           max_heart_rate_bpm: s.maxHR,
-          avg_cadence: s.averageRunCadence ?? s.averageBikeCadence,
-          max_cadence: s.maxRunCadence ?? s.maxBikeCadence,
-          avg_power_watts: s.averagePower,
-          max_power_watts: s.maxPower,
-          normalized_power_watts: s.normPower,
-          elevation_gain_m: s.elevationGain != null ? round(s.elevationGain) : undefined,
-          elevation_loss_m: s.elevationLoss != null ? round(s.elevationLoss) : undefined,
-          min_elevation_m: s.minElevation != null ? round(s.minElevation) : undefined,
-          max_elevation_m: s.maxElevation != null ? round(s.maxElevation) : undefined,
-          aerobic_training_effect: s.trainingEffect,
-          anaerobic_training_effect: s.anaerobicTrainingEffect,
+          avg_cadence: num(s.averageRunCadence ?? s.averageBikeCadence),
+          max_cadence: num(s.maxRunCadence ?? s.maxBikeCadence),
+          avg_power_watts: num(s.averagePower),
+          max_power_watts: num(s.maxPower),
+          normalized_power_watts: num(s.normPower),
+          elevation_gain_m: num(s.elevationGain, 0),
+          elevation_loss_m: num(s.elevationLoss, 0),
+          min_elevation_m: num(s.minElevation, 0),
+          max_elevation_m: num(s.maxElevation, 0),
+          aerobic_training_effect: num(s.trainingEffect),
+          anaerobic_training_effect: num(s.anaerobicTrainingEffect),
           training_effect_label: s.trainingEffectLabel,
           hr_time_in_zones: zoneList(hrZones),
           power_time_in_zones: zoneList(powerZones),

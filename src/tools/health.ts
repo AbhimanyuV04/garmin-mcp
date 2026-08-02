@@ -6,6 +6,8 @@ import {
   daysAgo,
   defineTool,
   hours,
+  localFromEpoch,
+  num,
   pct,
   problem,
   round,
@@ -38,8 +40,8 @@ export function registerHealthTools(server: McpServer): void {
         compact({
           date: day,
           sleep_hours: hours(total),
-          sleep_start: dto.sleepStartTimestampGMT,
-          sleep_end: dto.sleepEndTimestampGMT,
+          sleep_start: localFromEpoch(dto.sleepStartTimestampLocal ?? dto.sleepStartTimestampGMT),
+          sleep_end: localFromEpoch(dto.sleepEndTimestampLocal ?? dto.sleepEndTimestampGMT),
           nap_hours: dto.napTimeSeconds ? hours(dto.napTimeSeconds) : undefined,
           sleep_score: scores.overall?.value,
           sleep_score_qualifier: scores.overall?.qualifierKey,
@@ -48,13 +50,20 @@ export function registerHealthTools(server: McpServer): void {
           light_sleep_hours: hours(dto.lightSleepSeconds ?? 0),
           rem_sleep_hours: hours(dto.remSleepSeconds ?? 0),
           awake_hours: hours(dto.awakeSleepSeconds ?? 0),
+          unmeasurable_hours: dto.unmeasurableSleepSeconds
+            ? hours(dto.unmeasurableSleepSeconds)
+            : undefined,
           deep_sleep_percent: pct(dto.deepSleepSeconds ?? 0, total),
           light_sleep_percent: pct(dto.lightSleepSeconds ?? 0, total),
           rem_sleep_percent: pct(dto.remSleepSeconds ?? 0, total),
+          // Without REM capability the stage split is coarse and deep sleep
+          // absorbs what a newer device would classify as REM.
+          device_tracks_rem: dto.deviceRemCapable,
           awake_count: dto.awakeCount,
           restless_moments: dto.restlessMomentsCount,
           avg_sleep_stress: dto.avgSleepStress,
-          resting_heart_rate_bpm: dto.restingHeartRate,
+          // Lives at the top level of the response, not inside dailySleepDTO.
+          resting_heart_rate_bpm: raw.restingHeartRate ?? dto.restingHeartRate,
           avg_overnight_hrv: raw.avgOvernightHrv,
           avg_spo2_percent: spo2.averageSpo2,
           lowest_spo2_percent: spo2.lowestSpo2
@@ -119,9 +128,16 @@ export function registerHealthTools(server: McpServer): void {
       const report = days?.[0];
       if (!report) return problem(`No body battery data for ${day}.`);
 
-      // bodyBatteryValuesArray entries are [timestamp, status, level, version].
+      // Column order varies by device, so read the index Garmin declares rather
+      // than assuming one. This account returns [timestamp, level], not the
+      // 4-column layout older devices send.
+      const levelIndex =
+        (report.bodyBatteryValueDescriptorDTOList ?? []).find(
+          (d: any) => d?.bodyBatteryValueDescriptorKey === 'bodyBatteryLevel'
+        )?.bodyBatteryValueDescriptorIndex ?? 1;
+
       const levels: number[] = (report.bodyBatteryValuesArray ?? [])
-        .map((entry: unknown[]) => entry?.[2])
+        .map((entry: unknown[]) => entry?.[levelIndex])
         .filter((v: unknown): v is number => typeof v === 'number' && v >= 0);
 
       const events = (report.bodyBatteryActivityEvent ?? []).map((e: any) =>
@@ -147,7 +163,13 @@ export function registerHealthTools(server: McpServer): void {
           current_feedback: report.bodyBatteryDynamicFeedbackEvent?.feedbackShortType,
           avg_stress_level: stress?.avgStressLevel,
           max_stress_level: stress?.maxStressLevel,
-          events: events.length ? events : undefined
+          events: events.length ? events : undefined,
+          // Garmin answers 200 with an all-null series when the device does not
+          // support body battery, which would otherwise read as a healthy zero.
+          body_battery_note:
+            !levels.length && report.charged == null
+              ? 'No body battery readings — this device does not report it. Stress values are shown instead.'
+              : undefined
         })
       );
     }
@@ -241,8 +263,8 @@ export function registerHealthTools(server: McpServer): void {
           vigorous_intensity_minutes: raw.vigorousIntensityMinutes,
           total_intensity_minutes: moderate + vigorous * 2,
           intensity_minutes_goal: raw.intensityMinutesGoal,
-          floors_ascended: raw.floorsAscended,
-          floors_descended: raw.floorsDescended,
+          floors_ascended: num(raw.floorsAscended, 0),
+          floors_descended: num(raw.floorsDescended, 0),
           floors_goal: raw.userFloorsAscendedGoal,
           resting_heart_rate_bpm: raw.restingHeartRate,
           avg_stress_level: raw.averageStressLevel
