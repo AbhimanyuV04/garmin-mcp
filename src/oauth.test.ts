@@ -93,3 +93,12 @@ assert.equal(isUsableRedirectUri('https://example.com/cb#frag'), false, 'fragmen
 assert.equal(isUsableRedirectUri('not a url'), false);
 
 console.log('✓ oauth primitives ok');
+
+// Secrets pasted into a dashboard commonly carry a trailing newline. Trimming
+// on read is what keeps that from silently changing the signing key.
+process.env.JWT_SECRET = `  ${'s'.repeat(20)}\n`;
+const { requireSecret } = require('./oauth') as typeof import('./oauth');
+assert.equal(requireSecret('JWT_SECRET'), 's'.repeat(20), 'whitespace is trimmed off secrets');
+
+process.env.JWT_SECRET = '   \n  ';
+assert.throws(() => requireSecret('JWT_SECRET'), /at least 16/, 'whitespace-only is not a secret');

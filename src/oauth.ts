@@ -249,8 +249,10 @@ export const clearAttempts = (who: string) => requireRedis().del(k.attempts(who)
 
 // ------------------------------------------------------------------- config
 
-export function requireSecret(name: 'JWT_SECRET' | 'ADMIN_PASSWORD'): string {
-  const value = process.env[name];
+export function requireSecret(name: 'JWT_SECRET'): string {
+  // Trimmed for the same reason as the Google credentials: a newline picked up
+  // while pasting would silently change the signing key.
+  const value = process.env[name]?.trim();
   if (!value || value.length < 16) {
     // Fail closed: a weak or missing secret must disable the server, not
     // silently downgrade it.

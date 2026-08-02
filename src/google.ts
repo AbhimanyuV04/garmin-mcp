@@ -11,13 +11,21 @@ const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 
 export type GoogleIdentity = { sub: string; email: string };
 
+/**
+ * Secrets pasted into a dashboard routinely carry a trailing newline or stray
+ * space. Google then rejects the credential as unknown, which surfaces as a
+ * generic sign-in failure with nothing pointing at the real cause — so trim on
+ * read rather than trusting the value to be clean.
+ */
+const env = (name: string): string | undefined => process.env[name]?.trim() || undefined;
+
 export function googleConfigured(): boolean {
-  return Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+  return Boolean(env('GOOGLE_CLIENT_ID') && env('GOOGLE_CLIENT_SECRET'));
 }
 
 export function requireGoogleConfig(): { clientId: string; clientSecret: string } {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const clientId = env('GOOGLE_CLIENT_ID');
+  const clientSecret = env('GOOGLE_CLIENT_SECRET');
   if (!clientId || !clientSecret) {
     throw new Error('GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set.');
   }
