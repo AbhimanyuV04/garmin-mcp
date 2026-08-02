@@ -1,5 +1,5 @@
 import { accessCount, maxUsers } from '../src/db';
-import { googleAuthUrl, googleConfigured } from '../src/google';
+import { googleAuthUrl, googleConfigured, openSignup } from '../src/google';
 import { putLoginState } from '../src/oauth';
 import { Req, Res, esc, html, issuerOf, page, param } from './_http';
 
@@ -31,6 +31,7 @@ export default async function handler(req: Req, res: Res) {
   const invite = param(req, 'invite')?.trim();
   const state = await putLoginState({ intent: 'connect', invite });
 
+  const open = openSignup();
   const cap = maxUsers();
   const full = (await accessCount()) >= cap;
 
@@ -52,8 +53,10 @@ export default async function handler(req: Req, res: Res) {
          <li>Add the connector URL to Claude.</li>
        </ol>
        ${
-         invite
-           ? `<div class="card">Using the invite code from your link.</div>`
+         open || invite
+           ? invite
+             ? `<div class="card">Using the invite code from your link.</div>`
+             : ''
            : `<form method="GET" action="/connect">
                 <label for="invite">Invite code <span class="fine">(if you were given one)</span></label>
                 <input id="invite" name="invite" type="text" autocomplete="off"
@@ -62,6 +65,17 @@ export default async function handler(req: Req, res: Res) {
               </form>`
        }
        <a class="btn" href="${esc(googleAuthUrl(issuer, state))}">Continue with Google</a>
+       ${
+         open
+           ? `<div class="card"><strong>Before you sign up.</strong> This is a personal
+                deployment run by an individual, not a company or a Garmin service. Linking
+                stores an access token for your Garmin account on their server for about 30
+                days, which can read your activities, location history, sleep and health
+                metrics. You can remove it at any time with "Unlink my Garmin data" after
+                signing in. If you would rather nobody else hold that, the project is open
+                source and you can run your own copy.</div>`
+           : ''
+       }
        <p class="fine">Whoever runs this server can see that you signed up, and stores a
        Garmin access token for you until you unlink. Your Garmin password is never stored.
        Unaffiliated with Garmin.</p>`

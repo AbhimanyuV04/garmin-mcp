@@ -1,5 +1,5 @@
 import { grantAccess, hasAccess, loadTokens, maxUsers } from '../../src/db';
-import { exchangeCode, isAllowed, userIdFor, validInvite } from '../../src/google';
+import { exchangeCode, isAllowed, openSignup, userIdFor, validInvite } from '../../src/google';
 import {
   DEPOSIT_TTL,
   depositAudience,
@@ -70,21 +70,23 @@ export default async function handler(req: Req, res: Res) {
     return html(res, 401, page('Sign-in failed', esc(message)));
   }
 
-  // Three ways in, all of them closed by default: named on the allowlist,
-  // already admitted by an invite, or presenting a valid invite now. Without
-  // one of these the deployment would store strangers' health credentials.
+  // Ways in, in order of how deliberate they are: named on the allowlist,
+  // already admitted, presenting a valid invite, or open sign-up if the
+  // operator has turned it on. Every route past the first records the address,
+  // so MAX_USERS still applies and growth stays bounded.
   let admitted = isAllowed(identity.email) || (await hasAccess(identity.email));
   let capped = false;
-  if (!admitted && validInvite(state.invite)) {
+  if (!admitted && (openSignup() || validInvite(state.invite))) {
     admitted = await grantAccess(identity.email);
-    // A valid code that cannot be redeemed means the cap is full; say so
-    // rather than implying the code was wrong.
+    // A valid route in that cannot be taken means the cap is full; say so
+    // rather than implying the code was wrong or the person unwelcome.
     capped = !admitted;
   }
 
   if (!admitted) {
+    const limit = maxUsers();
     const reason = capped
-      ? `This server has reached its limit of ${maxUsers()} people.`
+      ? `This server has reached its limit of ${limit} people.`
       : `${identity.email} is not permitted to use this server.`;
     if (bounce('access_denied', reason)) return;
     return html(
@@ -93,7 +95,7 @@ export default async function handler(req: Req, res: Res) {
       page(
         capped ? 'Server is full' : 'Not on the list',
         capped
-          ? `Its owner has capped it at ${maxUsers()} people. Ask them to raise
+          ? `Its owner has capped it at ${limit} people. Ask them to raise
              <code>MAX_USERS</code>, or run your own copy.`
           : `<strong>${esc(identity.email)}</strong> isn't allowed to use this server.
              Ask whoever runs it for an invite code, or run your own copy.`

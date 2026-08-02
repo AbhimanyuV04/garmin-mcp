@@ -324,5 +324,45 @@ const stateFrom = (html: string) => {
   joined = await joinWith('run-club-2026-abc', { sub: '666', email: 'runner4@example.com' });
   assert.equal(joined.code, 403, 'unset INVITE_CODES means no invite works');
 
-  console.log('✓ oauth flow ok (multi-user + invites)');
+  // --- open sign-up ---------------------------------------------------------
+  // Off by default, so a deployment is never open by accident.
+  assert.equal(
+    (await joinWith(undefined, { sub: '777', email: 'anyone@example.com' })).code,
+    403,
+    'open sign-up is off unless turned on'
+  );
+
+  process.env.OPEN_SIGNUP = 'true';
+  process.env.MAX_USERS = 'unlimited';
+
+  joined = await joinWith(undefined, { sub: '777', email: 'anyone@example.com' });
+  assert.equal(joined.code, 200, 'anyone may sign up when open');
+  assert.ok(store.get('access:granted:anyone@example.com'), 'open sign-ups are still recorded');
+
+  joined = await joinWith(undefined, { sub: '888', email: 'someone.else@example.com' });
+  assert.equal(joined.code, 200, 'and the next person too');
+
+  // Unverified addresses stay refused: identity still has to be real.
+  const c = await call(connectHandler, { method: 'GET', query: {} });
+  nextGoogleUser = { sub: '999', email: 'spoofed@example.com', verified: false };
+  joined = await call(callbackHandler, {
+    method: 'GET',
+    query: { code: 'g-code', state: stateFrom(c.text) }
+  });
+  assert.equal(joined.code, 401, 'open does not mean unverified emails are accepted');
+
+  // The cap still binds when it is set, even in open mode.
+  process.env.MAX_USERS = '1';
+  joined = await joinWith(undefined, { sub: '1010', email: 'latecomer@example.com' });
+  assert.equal(joined.code, 403, 'MAX_USERS still caps an open server');
+  assert.match(joined.text, /Server is full/);
+
+  // Anyone already admitted keeps working once the cap is hit.
+  joined = await joinWith(undefined, { sub: '777', email: 'anyone@example.com' });
+  assert.equal(joined.code, 200, 'existing users are not locked out by the cap');
+
+  delete process.env.OPEN_SIGNUP;
+  delete process.env.MAX_USERS;
+
+  console.log('✓ oauth flow ok (multi-user + invites + open)');
 })();

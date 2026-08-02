@@ -129,6 +129,14 @@ export function isAllowed(email: string): boolean {
 }
 
 /**
+ * Open mode: any Google account with a verified email may sign up.
+ *
+ * Off unless explicitly turned on, so a deployment is never open by accident —
+ * turning it on is a decision the operator makes, not a default they inherit.
+ */
+export const openSignup = (): boolean => env('OPEN_SIGNUP')?.toLowerCase() === 'true';
+
+/**
  * Whether an invite code is one this deployment issued.
  *
  * Lets a group self-serve without the owner adding addresses one at a time,

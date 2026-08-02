@@ -110,8 +110,19 @@ export async function saveTokens(userId: string, tokens: GarminTokens): Promise<
 const accessKey = (email: string) => `access:granted:${email.trim().toLowerCase()}`;
 const ACCESS_COUNT = 'access:count';
 
-/** Ceiling on invite redemptions, so a leaked code cannot enrol the internet. */
-export const maxUsers = () => Number(process.env.MAX_USERS ?? 25);
+/**
+ * Ceiling on sign-ups. Set MAX_USERS=unlimited to remove it.
+ *
+ * A cap is the difference between a service that grows as fast as its owner
+ * intends and one that grows as fast as a forwarded link travels, so it stays
+ * on by default even in open mode — raising it is one variable.
+ */
+export const maxUsers = (): number => {
+  const raw = process.env.MAX_USERS?.trim().toLowerCase();
+  if (raw === 'unlimited' || raw === 'none') return Infinity;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 25;
+};
 
 /** Has this address already redeemed an invite? Grants outlive Garmin tokens. */
 export async function hasAccess(email: string): Promise<boolean> {
