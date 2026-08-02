@@ -149,6 +149,11 @@ npm test        # build, then run the assert-based checks
 Tokens live at `~/.garmin-mcp/tokens.json`, overridable with
 `GARMIN_TOKEN_PATH`. See `.env.example` for the full list of variables.
 
-An optional Vercel-hosted token extractor lives in `api/` and `public/` — see
-[DEPLOY.md](DEPLOY.md). It is strictly less safe than `npm run auth` and exists
-only for machines without a local toolchain.
+## Remote mode
+
+The same tools can run as a hosted connector for Claude Web: a Vercel
+deployment with an OAuth 2.1 authorization server and Garmin tokens in Upstash
+Redis. Add one URL in Claude, log in, and the tools appear.
+
+Local stdio stays the simpler option and exposes nothing to the internet. See
+[DEPLOY.md](DEPLOY.md) for the hosted setup and its trade-offs.

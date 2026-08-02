@@ -237,3 +237,13 @@ export function issuerFrom(host: string | undefined, proto = 'https'): string {
   const scheme = host.startsWith('localhost') || host.startsWith('127.0.0.1') ? 'http' : proto;
   return `${scheme}://${host}`;
 }
+
+/**
+ * The canonical MCP endpoint URL, used as the JWT audience, advertised as the
+ * protected resource, and given to users as the connector URL.
+ *
+ * Defined once on purpose: the token endpoint stamps this into `aud` and the
+ * transport checks it, so if the two ever drifted apart every request would
+ * fail authentication for no visible reason.
+ */
+export const resourceUrl = (issuer: string) => `${issuer}/mcp`;

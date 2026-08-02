@@ -14,9 +14,9 @@ export default async function handler(req: Req, res: Res) {
   noStore(res);
   return res.status(200).json({
     issuer,
-    authorization_endpoint: `${issuer}/api/oauth/authorize`,
-    token_endpoint: `${issuer}/api/oauth/token`,
-    registration_endpoint: `${issuer}/api/oauth/register`,
+    authorization_endpoint: `${issuer}/authorize`,
+    token_endpoint: `${issuer}/token`,
+    registration_endpoint: `${issuer}/register`,
     response_types_supported: ['code'],
     grant_types_supported: ['authorization_code', 'refresh_token'],
     // S256 only: `plain` is advertised nowhere because it is refused everywhere.

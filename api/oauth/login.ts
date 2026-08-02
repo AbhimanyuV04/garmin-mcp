@@ -106,7 +106,7 @@ const retryPage = (requestId: string, error: string) =>
   shell(
     'Authorize access',
     `<h1>Authorize access</h1><p class="err">${esc(error)}</p>
-     <form method="POST" action="/api/oauth/login" autocomplete="off">
+     <form method="POST" action="/login" autocomplete="off">
        <input type="hidden" name="request_id" value="${esc(requestId)}">
        <label for="password">Admin password</label>
        <input id="password" name="password" type="password" required autocomplete="current-password">

@@ -101,7 +101,7 @@ const loginPage = (requestId: string, clientName: string) =>
     `<h1>Authorize access</h1>
      <p><strong>${esc(clientName)}</strong> is requesting access to your Garmin data
      through this server. Sign in to approve.</p>
-     <form method="POST" action="/api/oauth/login" autocomplete="off">
+     <form method="POST" action="/login" autocomplete="off">
        <input type="hidden" name="request_id" value="${esc(requestId)}">
        <label for="password">Admin password</label>
        <input id="password" name="password" type="password" required autocomplete="current-password">

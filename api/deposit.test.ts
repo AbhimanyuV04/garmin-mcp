@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import handler from './token';
+import handler from './deposit';
 
 type Captured = { code: number; body: any };
 

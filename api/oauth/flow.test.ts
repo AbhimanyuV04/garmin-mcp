@@ -235,7 +235,7 @@ const REDIRECT = 'https://claude.ai/api/mcp/auth_callback';
 
   const claims = verifyJwt(tok.body.access_token, process.env.JWT_SECRET!, {
     iss: 'https://mcp.example',
-    aud: 'https://mcp.example/api/mcp'
+    aud: 'https://mcp.example/mcp'
   });
   assert.equal(claims?.sub, OWNER_USER_ID, 'access token identifies the owner');
 

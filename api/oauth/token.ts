@@ -3,6 +3,7 @@ import {
   REFRESH_TTL,
   issueRefresh,
   issuerFrom,
+  resourceUrl,
   requireSecret,
   safeEqual,
   signJwt,
@@ -103,7 +104,7 @@ async function issue(
 ) {
   const now = Math.floor(Date.now() / 1000);
   const access = signJwt(
-    { sub, iss: issuer, aud: `${issuer}/api/mcp`, exp: now + ACCESS_TTL, scope },
+    { sub, iss: issuer, aud: resourceUrl(issuer), exp: now + ACCESS_TTL, scope },
     secret
   );
   const refresh = await issueRefresh(sub, clientId);

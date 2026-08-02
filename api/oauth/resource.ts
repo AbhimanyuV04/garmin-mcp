@@ -1,4 +1,4 @@
-import { issuerFrom } from '../../src/oauth';
+import { issuerFrom, resourceUrl } from '../../src/oauth';
 import { Req, Res, header, noStore } from '../_http';
 
 /**
@@ -12,7 +12,7 @@ export default async function handler(req: Req, res: Res) {
   const issuer = issuerFrom(header(req, 'host'));
   noStore(res);
   return res.status(200).json({
-    resource: `${issuer}/api/mcp`,
+    resource: resourceUrl(issuer),
     authorization_servers: [issuer],
     bearer_methods_supported: ['header'],
     scopes_supported: ['garmin:read', 'garmin:write']

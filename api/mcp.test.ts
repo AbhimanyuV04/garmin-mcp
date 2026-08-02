@@ -7,7 +7,7 @@ import { signJwt } from '../src/oauth';
 
 const SECRET = process.env.JWT_SECRET!;
 const ISSUER = 'https://mcp.example';
-const AUD = `${ISSUER}/api/mcp`;
+const AUD = `${ISSUER}/mcp`;
 const now = () => Math.floor(Date.now() / 1000);
 const bearer = (claims: Parameters<typeof signJwt>[0]) => `Bearer ${signJwt(claims, SECRET)}`;
 

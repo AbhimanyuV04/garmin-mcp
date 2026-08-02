@@ -1,6 +1,11 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
+    { "source": "/mcp", "destination": "/api/mcp" },
+    { "source": "/authorize", "destination": "/api/oauth/authorize" },
+    { "source": "/token", "destination": "/api/oauth/token" },
+    { "source": "/login", "destination": "/api/oauth/login" },
+    { "source": "/register", "destination": "/api/oauth/register" },
     {
       "source": "/.well-known/oauth-authorization-server",
       "destination": "/api/oauth/metadata"
@@ -19,7 +24,7 @@
         { "key": "Referrer-Policy", "value": "no-referrer" },
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'"
+          "value": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
         }
       ]
     },

@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { GarminSession } from '../src/garmin';
 import { createServer } from '../src/server';
-import { issuerFrom, requireSecret, verifyJwt } from '../src/oauth';
+import { issuerFrom, requireSecret, resourceUrl, verifyJwt } from '../src/oauth';
 
 type Req = IncomingMessage & { body?: unknown };
 
@@ -48,7 +48,7 @@ export function resolveUser(authorization: string | undefined, issuer: string): 
 
   // Audience is scoped to this endpoint, so a token minted for another
   // resource on the same secret cannot be replayed here.
-  const claims = verifyJwt(match[1], secret, { iss: issuer, aud: `${issuer}/api/mcp` });
+  const claims = verifyJwt(match[1], secret, { iss: issuer, aud: resourceUrl(issuer) });
   if (!claims) {
     return {
       ok: false,

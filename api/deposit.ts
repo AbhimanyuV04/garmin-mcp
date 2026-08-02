@@ -1,7 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { GarminConnect } from 'garmin-connect';
 import { encodeTokens, isHosted, saveTokens } from '../src/db';
-import { OWNER_USER_ID, issuerFrom, verifyJwt } from '../src/oauth';
+import { OWNER_USER_ID, issuerFrom, resourceUrl, verifyJwt } from '../src/oauth';
 
 // Structural types instead of @vercel/node: that package is types-only for this
 // handler but drags in a dev tree with known advisories. Vercel supplies the
@@ -46,7 +46,7 @@ function authenticate(req: VercelRequest): Caller {
     }
     const host = req.headers['host'];
     const issuer = issuerFrom(Array.isArray(host) ? host[0] : host);
-    const claims = verifyJwt(bearer[1], secret, { iss: issuer, aud: `${issuer}/api/mcp` });
+    const claims = verifyJwt(bearer[1], secret, { iss: issuer, aud: resourceUrl(issuer) });
     if (!claims) return { ok: false, error: 'Bearer token is invalid or expired.' };
     return { ok: true, userId: claims.sub };
   }

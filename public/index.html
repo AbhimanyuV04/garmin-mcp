@@ -117,7 +117,7 @@
         $('go').textContent = 'Contacting Garmin...';
 
         try {
-          const r = await fetch('/api/token', {
+          const r = await fetch('/api/deposit', {
             method: 'POST',
             headers: { 'content-type': 'application/json', 'x-auth-gate': $('gate').value },
             body: JSON.stringify({ email: $('email').value, password: $('password').value })
