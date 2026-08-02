@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { GarminSession } from '../src/garmin';
-import { createServer } from '../src/server';
+import { createServer } from '../src/create-server';
 import { issuerFrom, requireSecret, resourceUrl, verifyJwt } from '../src/oauth';
 
 type Req = IncomingMessage & { body?: unknown };

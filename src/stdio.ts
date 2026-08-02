@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { GarminSession } from './garmin';
-import { createServer } from './server';
+import { createServer } from './create-server';
 
 async function main() {
   // Local stdio serves exactly one user, so one session for the process life is
