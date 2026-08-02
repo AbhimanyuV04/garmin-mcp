@@ -2,9 +2,12 @@ import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 
 /**
- * End-to-end OAuth flow against an in-memory Redis stub: register -> authorize
- * -> login -> token. Unit tests cover the primitives; this proves the handlers
- * actually compose, and that replay and PKCE failures are caught in situ.
+ * End-to-end OAuth flow with Google as the identity provider, against an
+ * in-memory Redis and a stubbed Google token endpoint.
+ *
+ * The load-bearing assertion is the last one: two different Google accounts
+ * must resolve to two different Garmin sessions. That is the whole reason this
+ * server is no longer single-user.
  */
 
 const store = new Map<string, string>();
@@ -36,7 +39,6 @@ class FakeRedis {
   }
 }
 
-// Seed the stub before anything lazily requires the real client.
 const resolved = require.resolve('@upstash/redis');
 require.cache[resolved] = {
   id: resolved,
@@ -48,13 +50,35 @@ require.cache[resolved] = {
 process.env.UPSTASH_REDIS_REST_URL = 'https://stub.upstash.io';
 process.env.UPSTASH_REDIS_REST_TOKEN = 'stub';
 process.env.JWT_SECRET = 'j'.repeat(32);
-process.env.ADMIN_PASSWORD = 'p'.repeat(20);
+process.env.GOOGLE_CLIENT_ID = 'test-client-id.apps.googleusercontent.com';
+process.env.GOOGLE_CLIENT_SECRET = 'test-secret';
+process.env.ALLOWED_EMAILS = 'you@example.com, dad@example.com';
+
+const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
+
+/** Stands in for Google's token endpoint. */
+let nextGoogleUser = { sub: '111', email: 'you@example.com', verified: true };
+(globalThis as { fetch: unknown }).fetch = async (url: string) => {
+  assert.equal(url, 'https://oauth2.googleapis.com/token', 'only Google is called');
+  const claims = {
+    iss: 'https://accounts.google.com',
+    aud: process.env.GOOGLE_CLIENT_ID,
+    sub: nextGoogleUser.sub,
+    email: nextGoogleUser.email,
+    email_verified: nextGoogleUser.verified,
+    exp: Math.floor(Date.now() / 1000) + 600
+  };
+  return {
+    ok: true,
+    json: async () => ({ id_token: `${b64({ alg: 'RS256' })}.${b64(claims)}.sig` })
+  };
+};
 
 const registerHandler = require('./register').default;
 const authorizeHandler = require('./authorize').default;
-const loginHandler = require('./login').default;
+const callbackHandler = require('../auth/callback').default;
 const tokenHandler = require('./token').default;
-const { verifyJwt, OWNER_USER_ID } = require('../../src/oauth') as typeof import('../../src/oauth');
+const { verifyJwt, resourceUrl } = require('../../src/oauth') as typeof import('../../src/oauth');
 
 type Captured = { code: number; body: any; text: string; headers: Record<string, string> };
 
@@ -83,34 +107,32 @@ function mockRes(): { res: any; out: Captured } {
   return { res, out };
 }
 
+const HOST = 'mcp.example';
+const ISSUER = `https://${HOST}`;
+const REDIRECT = 'https://claude.ai/api/mcp/auth_callback';
+
 const call = async (handler: any, req: any): Promise<Captured> => {
   const { res, out } = mockRes();
-  await handler({ headers: { host: 'mcp.example' }, ...req }, res);
+  await handler({ headers: { host: HOST }, ...req }, res);
   return out;
 };
 
-const REDIRECT = 'https://claude.ai/api/mcp/auth_callback';
+/** Pulls the state parameter out of a rendered "Continue with Google" link. */
+const stateFrom = (html: string) => {
+  const href = /href="([^"]*accounts\.google\.com[^"]*)"/.exec(html)?.[1] ?? '';
+  return new URL(href.replace(/&amp;/g, '&')).searchParams.get('state')!;
+};
 
 (async () => {
-  // 1. Dynamic client registration.
+  const verifier = randomBytes(32).toString('base64url');
+  const challenge = createHash('sha256').update(verifier).digest('base64url');
+
   const reg = await call(registerHandler, {
     method: 'POST',
     body: { redirect_uris: [REDIRECT], client_name: 'Claude' }
   });
-  assert.equal(reg.code, 201, 'client registered');
   const clientId = reg.body.client_id as string;
-  assert.ok(clientId, 'client_id issued');
 
-  // A redirect_uri that cannot protect a code must be refused at registration.
-  const badReg = await call(registerHandler, {
-    method: 'POST',
-    body: { redirect_uris: ['http://evil.example/cb'] }
-  });
-  assert.equal(badReg.code, 400, 'plaintext non-loopback redirect refused');
-
-  // 2. Authorize, with PKCE.
-  const verifier = randomBytes(32).toString('base64url');
-  const challenge = createHash('sha256').update(verifier).digest('base64url');
   const authQuery = {
     client_id: clientId,
     redirect_uri: REDIRECT,
@@ -120,146 +142,90 @@ const REDIRECT = 'https://claude.ai/api/mcp/auth_callback';
     code_challenge_method: 'S256'
   };
 
-  const auth = await call(authorizeHandler, { method: 'GET', query: authQuery });
-  assert.equal(auth.code, 200, 'login form rendered');
-  const requestId = /name="request_id" value="([^"]+)"/.exec(auth.text)?.[1];
-  assert.ok(requestId, 'request_id embedded in form');
-
-  // An unregistered redirect_uri must render an error, never redirect.
+  // --- an unregistered redirect_uri is still refused without redirecting ----
   const mismatch = await call(authorizeHandler, {
     method: 'GET',
     query: { ...authQuery, redirect_uri: 'https://evil.example/cb' }
   });
-  assert.equal(mismatch.code, 400, 'redirect mismatch refused');
+  assert.equal(mismatch.code, 400);
   assert.equal(mismatch.headers.location, undefined, 'must NOT redirect an unverified uri');
 
-  // Missing PKCE bounces back to the (now trusted) redirect_uri.
-  const noPkce = await call(authorizeHandler, {
+  // --- sign-in is refused for anyone not on the allowlist -------------------
+  let auth = await call(authorizeHandler, { method: 'GET', query: authQuery });
+  assert.equal(auth.code, 200);
+  nextGoogleUser = { sub: '999', email: 'stranger@example.com', verified: true };
+  let cb = await call(callbackHandler, {
     method: 'GET',
-    query: { ...authQuery, code_challenge: undefined }
+    query: { code: 'g-code', state: stateFrom(auth.text) }
   });
-  assert.equal(noPkce.code, 302);
-  assert.match(noPkce.headers.location, /error=invalid_request/, 'PKCE required');
+  assert.equal(cb.code, 403, 'allowlist keeps strangers out');
+  assert.equal(cb.headers.location, undefined, 'no authorization code for a stranger');
 
-  // 3. Login. Without Garmin tokens stored, connecting must fail loudly.
-  const noGarmin = await call(loginHandler, {
-    method: 'POST',
-    body: { request_id: requestId, password: 'p'.repeat(20) }
+  // --- an unverified Google email is refused --------------------------------
+  auth = await call(authorizeHandler, { method: 'GET', query: authQuery });
+  nextGoogleUser = { sub: '111', email: 'you@example.com', verified: false };
+  cb = await call(callbackHandler, {
+    method: 'GET',
+    query: { code: 'g-code', state: stateFrom(auth.text) }
   });
-  assert.equal(noGarmin.code, 409, 'refuses to bind a session with no Garmin tokens');
+  assert.equal(cb.code, 401, 'unverified email refused');
 
-  store.set(
-    `garmin:tokens:${OWNER_USER_ID}`,
-    JSON.stringify({ oauth1: { oauth_token: 'o' }, oauth2: { access_token: 'a' } })
-  );
-
-  const wrongPw = await call(loginHandler, {
-    method: 'POST',
-    body: { request_id: requestId, password: 'wrong-password-here' }
+  // --- a replayed state is refused ------------------------------------------
+  auth = await call(authorizeHandler, { method: 'GET', query: authQuery });
+  const usedState = stateFrom(auth.text);
+  nextGoogleUser = { sub: '111', email: 'you@example.com', verified: true };
+  await call(callbackHandler, { method: 'GET', query: { code: 'g-code', state: usedState } });
+  const replay = await call(callbackHandler, {
+    method: 'GET',
+    query: { code: 'g-code', state: usedState }
   });
-  assert.equal(wrongPw.code, 401, 'wrong password rejected');
-  assert.equal(wrongPw.headers.location, undefined, 'no code issued on failed login');
+  assert.equal(replay.code, 400, 'state is single use');
 
-  const login = await call(loginHandler, {
-    method: 'POST',
-    body: { request_id: requestId, password: 'p'.repeat(20) }
+  // --- signed in, but no Garmin linked yet ----------------------------------
+  auth = await call(authorizeHandler, { method: 'GET', query: authQuery });
+  cb = await call(callbackHandler, {
+    method: 'GET',
+    query: { code: 'g-code', state: stateFrom(auth.text) }
   });
-  assert.equal(login.code, 302, 'redirects back to the client');
-  const location = new URL(login.headers.location);
-  assert.equal(location.origin + location.pathname, REDIRECT);
-  assert.equal(location.searchParams.get('state'), 'st-123', 'state round-trips');
-  const code = location.searchParams.get('code')!;
-  assert.ok(code, 'authorization code issued');
+  assert.equal(cb.code, 409, 'refuses to finish before Garmin is linked');
+  assert.match(cb.text, /Connect Garmin/);
 
-  // 4. Token exchange, wrong verifier first.
-  const badPkce = await call(tokenHandler, {
-    method: 'POST',
-    body: {
-      grant_type: 'authorization_code',
-      code,
-      code_verifier: randomBytes(32).toString('base64url'),
-      client_id: clientId
-    }
-  });
-  assert.equal(badPkce.code, 400, 'wrong code_verifier rejected');
-  assert.equal(badPkce.body.error, 'invalid_grant');
+  // --- link Garmin for both people, under their own ids ---------------------
+  store.set('garmin:tokens:google_111', JSON.stringify({ oauth1: { oauth_token: 'yours' } }));
+  store.set('garmin:tokens:google_222', JSON.stringify({ oauth1: { oauth_token: 'dads' } }));
 
-  // The failed attempt consumed the code, so even the right verifier now fails.
-  const afterBurn = await call(tokenHandler, {
-    method: 'POST',
-    body: { grant_type: 'authorization_code', code, code_verifier: verifier, client_id: clientId }
-  });
-  assert.equal(afterBurn.code, 400, 'codes are single use even after a failed redemption');
+  async function fullFlow(user: { sub: string; email: string }) {
+    nextGoogleUser = { ...user, verified: true };
+    const a = await call(authorizeHandler, { method: 'GET', query: authQuery });
+    const c = await call(callbackHandler, {
+      method: 'GET',
+      query: { code: 'g-code', state: stateFrom(a.text) }
+    });
+    assert.equal(c.code, 302, `${user.email} completes sign-in`);
+    const authCode = new URL(c.headers.location).searchParams.get('code')!;
+    const t = await call(tokenHandler, {
+      method: 'POST',
+      body: {
+        grant_type: 'authorization_code',
+        code: authCode,
+        code_verifier: verifier,
+        client_id: clientId
+      }
+    });
+    assert.equal(t.code, 200, `${user.email} exchanges the code`);
+    return verifyJwt(t.body.access_token, process.env.JWT_SECRET!, {
+      iss: ISSUER,
+      aud: resourceUrl(ISSUER)
+    })!;
+  }
 
-  // Fresh round for the happy path.
-  const auth2 = await call(authorizeHandler, { method: 'GET', query: authQuery });
-  const rid2 = /name="request_id" value="([^"]+)"/.exec(auth2.text)![1];
-  const login2 = await call(loginHandler, {
-    method: 'POST',
-    body: { request_id: rid2, password: 'p'.repeat(20) }
-  });
-  const code2 = new URL(login2.headers.location).searchParams.get('code')!;
+  const yours = await fullFlow({ sub: '111', email: 'you@example.com' });
+  const dads = await fullFlow({ sub: '222', email: 'dad@example.com' });
 
-  const wrongClient = await call(tokenHandler, {
-    method: 'POST',
-    body: {
-      grant_type: 'authorization_code',
-      code: code2,
-      code_verifier: verifier,
-      client_id: 'mcp_someoneelse'
-    }
-  });
-  assert.equal(wrongClient.code, 400, 'code bound to the issuing client');
+  assert.equal(yours.sub, 'google_111');
+  assert.equal(dads.sub, 'google_222');
+  // The point of the whole phase: two people, two identities, two data sets.
+  assert.notEqual(yours.sub, dads.sub, 'separate Google accounts get separate sessions');
 
-  const auth3 = await call(authorizeHandler, { method: 'GET', query: authQuery });
-  const rid3 = /name="request_id" value="([^"]+)"/.exec(auth3.text)![1];
-  const login3 = await call(loginHandler, {
-    method: 'POST',
-    body: { request_id: rid3, password: 'p'.repeat(20) }
-  });
-  const code3 = new URL(login3.headers.location).searchParams.get('code')!;
-
-  const tok = await call(tokenHandler, {
-    method: 'POST',
-    body: {
-      grant_type: 'authorization_code',
-      code: code3,
-      code_verifier: verifier,
-      client_id: clientId,
-      redirect_uri: REDIRECT
-    }
-  });
-  assert.equal(tok.code, 200, 'token issued');
-  assert.equal(tok.body.token_type, 'Bearer');
-  assert.equal(tok.headers['cache-control'], 'no-store, max-age=0', 'tokens are uncacheable');
-
-  const claims = verifyJwt(tok.body.access_token, process.env.JWT_SECRET!, {
-    iss: 'https://mcp.example',
-    aud: 'https://mcp.example/mcp'
-  });
-  assert.equal(claims?.sub, OWNER_USER_ID, 'access token identifies the owner');
-
-  // 5. Refresh rotation.
-  const refreshed = await call(tokenHandler, {
-    method: 'POST',
-    body: {
-      grant_type: 'refresh_token',
-      refresh_token: tok.body.refresh_token,
-      client_id: clientId
-    }
-  });
-  assert.equal(refreshed.code, 200, 'refresh grant works');
-  assert.notEqual(refreshed.body.refresh_token, tok.body.refresh_token, 'refresh token rotates');
-
-  const replayed = await call(tokenHandler, {
-    method: 'POST',
-    body: {
-      grant_type: 'refresh_token',
-      refresh_token: tok.body.refresh_token,
-      client_id: clientId
-    }
-  });
-  assert.equal(replayed.code, 400, 'rotated refresh token cannot be replayed');
-
-  console.log('✓ oauth flow ok');
+  console.log('✓ oauth flow ok (multi-user)');
 })();

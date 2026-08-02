@@ -1,13 +1,14 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "outputDirectory": "public",
   "rewrites": [
+    { "source": "/", "destination": "/api/connect" },
+    { "source": "/connect", "destination": "/api/connect" },
     { "source": "/mcp", "destination": "/api/mcp" },
     { "source": "/authorize", "destination": "/api/oauth/authorize" },
     { "source": "/token", "destination": "/api/oauth/token" },
-    { "source": "/login", "destination": "/api/oauth/login" },
     { "source": "/register", "destination": "/api/oauth/register" },
+    { "source": "/auth/callback", "destination": "/api/auth/callback" },
     {
       "source": "/.well-known/oauth-authorization-server",
       "destination": "/api/oauth/metadata"

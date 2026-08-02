@@ -1,7 +1,16 @@
-import { timingSafeEqual } from 'node:crypto';
 import { GarminConnect } from 'garmin-connect';
-import { encodeTokens, isHosted, saveTokens } from '../src/db';
-import { OWNER_USER_ID, issuerFrom, resourceUrl, verifyJwt } from '../src/oauth';
+import { deleteTokens, isHosted, saveTokens } from '../src/db';
+import { depositAudience, requireSecret, verifyJwt } from '../src/oauth';
+
+/**
+ * Exchanges Garmin credentials for OAuth tokens and stores them against the
+ * signed-in user. The password is used once to reach Garmin and is never
+ * written to disk, stored, or logged.
+ *
+ * Callers must present a deposit token issued after Google sign-in, so tokens
+ * can only ever be written under an authenticated identity — never one named
+ * in the request body.
+ */
 
 // Structural types instead of @vercel/node: that package is types-only for this
 // handler but drags in a dev tree with known advisories. Vercel supplies the
@@ -17,66 +26,44 @@ type VercelResponse = {
   status(code: number): { json(body: unknown): unknown };
 };
 
-/**
- * Exchanges Garmin credentials for OAuth tokens and hands them straight back to
- * the caller. Nothing is stored: no database, no disk write, no credential
- * logging. The tokens exist only in this function's memory and the response.
- *
- * This endpoint takes a password over the wire, so it is deliberately useless
- * until an access gate is configured — see `assertGate`.
- */
-
 type Caller = { ok: true; userId: string } | { ok: false; error: string };
 
-/**
- * Two ways in, both of which must name a user before any deposit happens.
- *
- * A bearer token from our own OAuth server identifies its subject directly. The
- * gate secret is the fallback for the standalone web form, and stands in for
- * the owner. Either way tokens are only ever written under an authenticated id,
- * never one supplied in the request body.
- */
 function authenticate(req: VercelRequest): Caller {
   const header = String(req.headers['authorization'] ?? '');
   const bearer = /^Bearer (.+)$/.exec(header);
-  if (bearer) {
-    const secret = process.env.JWT_SECRET;
-    if (!secret || secret.length < 16) {
-      return { ok: false, error: 'Bearer auth is unavailable: JWT_SECRET is not configured.' };
-    }
-    const host = req.headers['host'];
-    const issuer = issuerFrom(Array.isArray(host) ? host[0] : host);
-    const claims = verifyJwt(bearer[1], secret, { iss: issuer, aud: resourceUrl(issuer) });
-    if (!claims) return { ok: false, error: 'Bearer token is invalid or expired.' };
-    return { ok: true, userId: claims.sub };
+  if (!bearer) {
+    return { ok: false, error: 'Sign in first — open /connect to link your Garmin account.' };
   }
 
-  const expected = process.env.AUTH_GATE_SECRET;
-  // Fail closed. An unconfigured deployment is a credential-harvesting page
-  // wearing a login form, so refuse to serve rather than default to open.
-  if (!expected) {
-    return { ok: false, error: 'This deployment has no AUTH_GATE_SECRET configured and is disabled.' };
-  }
-  if (expected.length < 16) {
-    return { ok: false, error: 'AUTH_GATE_SECRET is too short to be meaningful. Use 16+ random characters.' };
+  let secret: string;
+  try {
+    secret = requireSecret('JWT_SECRET');
+  } catch {
+    return { ok: false, error: 'This deployment is not configured (JWT_SECRET missing).' };
   }
 
-  const provided = String(req.headers['x-auth-gate'] ?? '');
-  const a = Buffer.from(provided);
-  const b = Buffer.from(expected);
-  // Compare in constant time, and only when lengths match — timingSafeEqual
-  // throws on a length mismatch, which would itself leak the length.
-  if (a.length !== b.length || !timingSafeEqual(a, b)) {
-    return { ok: false, error: 'Incorrect access key.' };
+  const host = req.headers['host'];
+  const hostname = Array.isArray(host) ? host[0] : host;
+  if (!hostname) return { ok: false, error: 'Missing Host header.' };
+  const issuer =
+    hostname.startsWith('localhost') || hostname.startsWith('127.0.0.1')
+      ? `http://${hostname}`
+      : `https://${hostname}`;
+
+  // Audience is the deposit endpoint specifically, so an MCP access token
+  // cannot be reused to overwrite someone's stored Garmin credentials.
+  const claims = verifyJwt(bearer[1], secret, { iss: issuer, aud: depositAudience(issuer) });
+  if (!claims) {
+    return { ok: false, error: 'Your sign-in expired. Reload /connect and try again.' };
   }
-  return { ok: true, userId: OWNER_USER_ID };
+  return { ok: true, userId: claims.sub };
 }
 
 /** Garmin's own errors can echo the submitted form back; never forward them raw. */
 function safeMessage(err: unknown): string {
   const raw = err instanceof Error ? err.message : '';
   if (/ticket not found|mfa/i.test(raw)) {
-    return 'Garmin did not accept those credentials. If your account has two-factor authentication enabled, this tool cannot complete the login — use the local `npm run auth` command instead.';
+    return 'Garmin did not accept those credentials. Accounts with two-factor authentication cannot be linked.';
   }
   if (/429|too many/i.test(raw)) {
     return 'Garmin is rate limiting these attempts. Wait several minutes before retrying.';
@@ -93,13 +80,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('X-Content-Type-Options', 'nosniff');
 
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST');
-    return res.status(405).json({ error: 'Use POST.' });
+  if (req.method !== 'POST' && req.method !== 'DELETE') {
+    res.setHeader('Allow', 'POST, DELETE');
+    return res.status(405).json({ error: 'Use POST to link, DELETE to unlink.' });
   }
 
   const caller = authenticate(req);
   if (!caller.ok) return res.status(401).json({ error: caller.error });
+
+  // Anyone storing someone else's health data needs a way to remove it.
+  if (req.method === 'DELETE') {
+    await deleteTokens(caller.userId);
+    return res.status(200).json({ deleted: true });
+  }
+
+  if (!isHosted()) {
+    return res.status(503).json({
+      error: 'No storage configured. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN.'
+    });
+  }
 
   const parsed = (typeof req.body === 'string' ? safeParse(req.body) : req.body) ?? {};
   const body = parsed as Record<string, unknown>;
@@ -113,24 +112,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const client = new GarminConnect({ username: email, password });
     await client.login();
-    const tokens = client.exportToken();
-
-    // Hosted: deposit under the authenticated id so /api/mcp can find them.
-    // Local: there is no Redis, so the caller keeps using the returned string.
-    let deposited = false;
-    if (isHosted()) {
-      await saveTokens(caller.userId, tokens);
-      deposited = true;
-    }
-
-    return res.status(200).json({
-      tokensBase64: encodeTokens(tokens),
-      tokens,
-      deposited,
-      userId: deposited ? caller.userId : undefined,
-      // displayName is a Garmin-internal uuid, so this is not a second identifier.
-      expiresAt: tokens.oauth2?.refresh_token_expires_at
-    });
+    await saveTokens(caller.userId, client.exportToken());
+    return res.status(200).json({ linked: true });
   } catch (err) {
     // Deliberately not logging the error object: Garmin's axios errors carry
     // request config, and the login body contains the password.

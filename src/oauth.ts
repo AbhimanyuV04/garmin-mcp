@@ -13,8 +13,11 @@ export const REFRESH_TTL = 30 * 24 * 60 * 60; // 30 days, matching Garmin tokens
 const CODE_TTL = 60; // authorization codes are redeemed immediately
 const REQUEST_TTL = 10 * 60; // time allowed to complete the login form
 
-/** The single account this server serves. See README for multi-user notes. */
-export const OWNER_USER_ID = 'owner';
+/** How long a Google sign-in round trip may take. */
+const LOGIN_STATE_TTL = 10 * 60;
+
+/** Short-lived token that lets the onboarding page deposit Garmin tokens. */
+export const DEPOSIT_TTL = 15 * 60;
 
 // ---------------------------------------------------------------- primitives
 
@@ -139,11 +142,20 @@ export type PendingRequest = {
 
 export type CodeRecord = PendingRequest & { sub: string };
 
+/**
+ * What the user was trying to do before being sent to Google. Carried through
+ * the round trip so the callback knows where to return them.
+ */
+export type LoginState =
+  | { intent: 'mcp'; requestId: string }
+  | { intent: 'connect' };
+
 const k = {
   client: (id: string) => `oauth:client:${id}`,
   request: (id: string) => `oauth:req:${id}`,
   code: (c: string) => `oauth:code:${c}`,
   refresh: (t: string) => `oauth:refresh:${t}`,
+  state: (s: string) => `oauth:state:${s}`,
   attempts: (who: string) => `oauth:attempts:${who}`
 };
 
@@ -189,6 +201,22 @@ export async function issueCode(record: CodeRecord): Promise<string> {
  */
 export async function takeCode(code: string): Promise<CodeRecord | null> {
   return parse<CodeRecord>(await requireRedis().getdel(k.code(code)));
+}
+
+/**
+ * Doubles as the CSRF token for the Google round trip: a callback whose state
+ * is not in Redis was not started here, so it is refused.
+ */
+export async function putLoginState(state: LoginState): Promise<string> {
+  const id = token();
+  await requireRedis().set(k.state(id), JSON.stringify(state), { ex: LOGIN_STATE_TTL });
+  return id;
+}
+
+/** Single use — consumed on read so a callback cannot be replayed. */
+export async function takeLoginState(id: string): Promise<LoginState | null> {
+  if (!id) return null;
+  return parse<LoginState>(await requireRedis().getdel(k.state(id)));
 }
 
 export async function issueRefresh(sub: string, client_id: string): Promise<string> {
@@ -247,3 +275,10 @@ export function issuerFrom(host: string | undefined, proto = 'https'): string {
  * fail authentication for no visible reason.
  */
 export const resourceUrl = (issuer: string) => `${issuer}/mcp`;
+
+/**
+ * Deposit tokens carry a different audience from MCP access tokens, so a token
+ * good for reading Garmin data cannot also be used to overwrite the stored
+ * credentials, and vice versa.
+ */
+export const depositAudience = (issuer: string) => `${issuer}/api/deposit`;
