@@ -2,10 +2,12 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { registerHealthTools } from './tools/health';
+import { registerTrainingTools } from './tools/training';
 
 const server = new McpServer({ name: 'garmin-mcp', version: '0.1.0' });
 
 registerHealthTools(server);
+registerTrainingTools(server);
 
 async function main() {
   await server.connect(new StdioServerTransport());

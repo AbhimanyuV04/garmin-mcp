@@ -1,71 +1,17 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { z } from 'zod';
 import { api, getDisplayName } from '../garmin';
-
-const dateSchema = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format');
-
-/** Local calendar date — Garmin days are local, so UTC would be off by a day. */
-function today(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
-    now.getDate()
-  ).padStart(2, '0')}`;
-}
-
-/** Garmin returns nulls for every metric the device didn't record; drop them. */
-function compact<T extends Record<string, unknown>>(obj: T): Partial<T> {
-  return Object.fromEntries(
-    Object.entries(obj).filter(([, v]) => v !== null && v !== undefined)
-  ) as Partial<T>;
-}
-
-const round = (n: number, places = 1) => Number(n.toFixed(places));
-const hours = (seconds: number) => round(seconds / 3600, 2);
-const pct = (part: number, whole: number) => (whole > 0 ? round((part / whole) * 100) : undefined);
-
-type Result = { content: { type: 'text'; text: string }[]; isError?: boolean };
-
-const text = (value: unknown): Result => ({
-  content: [{ type: 'text', text: JSON.stringify(value, null, 2) }]
-});
-
-const problem = (message: string): Result => ({
-  content: [{ type: 'text', text: message }],
-  isError: true
-});
-
-/**
- * Registers a tool with uniform error handling: Garmin answers 404/204 for a
- * date the watch wasn't worn, which is a normal empty day rather than a fault.
- */
-function defineTool<S extends z.ZodRawShape>(
-  server: McpServer,
-  name: string,
-  description: string,
-  inputSchema: S,
-  handler: (args: z.infer<z.ZodObject<S>>) => Promise<Result>
-): void {
-  server.registerTool(name, { description, inputSchema }, (async (args: unknown) => {
-    try {
-      return await handler(args as z.infer<z.ZodObject<S>>);
-    } catch (err: unknown) {
-      const status = (err as { response?: { status?: number } })?.response?.status;
-      if (status === 404 || status === 204) {
-        return problem(`No data available from Garmin for that date.`);
-      }
-      if (status === 401 || status === 403) {
-        return problem('Garmin rejected the session. Re-run `npm run auth` to refresh tokens.');
-      }
-      if (status === 429) {
-        return problem('Garmin is rate limiting this account. Wait a few minutes and retry.');
-      }
-      const message = err instanceof Error ? err.message : String(err);
-      return problem(`Could not fetch ${name}: ${message}`);
-    }
-  }) as Parameters<McpServer['registerTool']>[2]);
-}
+import {
+  compact,
+  dateSchema,
+  daysAgo,
+  defineTool,
+  hours,
+  pct,
+  problem,
+  round,
+  text,
+  today
+} from './common';
 
 export function registerHealthTools(server: McpServer): void {
   defineTool(
@@ -315,8 +261,7 @@ export function registerHealthTools(server: McpServer): void {
     },
     async ({ startDate, endDate }) => {
       const end = endDate ?? today();
-      const start =
-        startDate ?? new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+      const start = startDate ?? daysAgo(30);
       if (start > end) return problem(`startDate ${start} is after endDate ${end}.`);
 
       const raw = await api<any>('/weight-service/weight/dateRange', {

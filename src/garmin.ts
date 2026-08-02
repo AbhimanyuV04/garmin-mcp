@@ -93,14 +93,29 @@ export async function api<T>(path: string, params?: Record<string, string>): Pro
   return client.client.get<T>(`${GC_API}${path}`, params ? { params } : undefined);
 }
 
-let displayName: Promise<string> | undefined;
+/** POST to a Garmin Connect API path. Used for workout creation. */
+export async function apiPost<T>(path: string, body: unknown): Promise<T> {
+  const client = await getGarminClient();
+  return client.client.post<T>(`${GC_API}${path}`, body);
+}
+
+let profile: Promise<{ displayName: string; profileId: number }> | undefined;
+
+function getProfile() {
+  profile ??= getGarminClient()
+    .then((c) => c.getUserProfile())
+    .then((p) => ({ displayName: p.displayName, profileId: p.profileId as number }));
+  return profile;
+}
 
 /** Several wellness endpoints are keyed by display name rather than user id. */
-export function getDisplayName(): Promise<string> {
-  displayName ??= getGarminClient()
-    .then((c) => c.getUserProfile())
-    .then((p) => p.displayName);
-  return displayName;
+export async function getDisplayName(): Promise<string> {
+  return (await getProfile()).displayName;
+}
+
+/** Gear endpoints key off the numeric profile id, not the display name. */
+export async function getProfileId(): Promise<number> {
+  return (await getProfile()).profileId;
 }
 
 // ponytail: the library's axios interceptor refreshes oauth2 in-memory on expiry,
