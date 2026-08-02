@@ -7,9 +7,9 @@
     "garmin-mcp-auth": "./dist/auth-cli.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && tsc -p tsconfig.api.json",
     "auth": "tsc && node dist/auth-cli.js",
-    "test": "tsc && node dist/garmin.test.js && node dist/tools/common.test.js && node dist/tools/training.test.js"
+    "test": "npm run build && node dist/garmin.test.js && node dist/tools/common.test.js && node dist/tools/training.test.js && node dist-api/api/token.test.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.28.0",
