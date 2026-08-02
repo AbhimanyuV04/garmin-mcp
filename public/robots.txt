@@ -1,0 +1,5 @@
+# Private tool: the sign-in and Garmin linking pages should never be indexed.
+# This file also keeps public/ present as the static output directory, which
+# Vercel requires; pointing that at the repo root would serve the source.
+User-agent: *
+Disallow: /
