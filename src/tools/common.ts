@@ -29,6 +29,33 @@ export const hours = (seconds: number) => round(seconds / 3600, 2);
 export const pct = (part: number, whole: number) =>
   whole > 0 ? round((part / whole) * 100) : undefined;
 
+export const km = (meters: number | null | undefined) =>
+  typeof meters === 'number' ? round(meters / 1000, 2) : undefined;
+
+/** Garmin reports speed in m/s; runners read pace, cyclists read km/h. */
+export const paceMinPerKm = (metersPerSecond: number | null | undefined) => {
+  if (typeof metersPerSecond !== 'number' || metersPerSecond <= 0) return undefined;
+  const totalMinutes = 1000 / metersPerSecond / 60;
+  const minutes = Math.floor(totalMinutes);
+  const seconds = Math.round((totalMinutes - minutes) * 60);
+  // 4:60/km would be wrong; carry the rounded second into the minute.
+  return seconds === 60 ? `${minutes + 1}:00` : `${minutes}:${String(seconds).padStart(2, '0')}`;
+};
+
+export const kmh = (metersPerSecond: number | null | undefined) =>
+  typeof metersPerSecond === 'number' ? round(metersPerSecond * 3.6, 1) : undefined;
+
+/** Seconds to h:mm:ss, dropping the hour when there isn't one. */
+export const hms = (seconds: number | null | undefined) => {
+  if (typeof seconds !== 'number') return undefined;
+  const total = Math.round(seconds);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+};
+
 export type Result = { content: { type: 'text'; text: string }[]; isError?: boolean };
 
 export const text = (value: unknown): Result => ({

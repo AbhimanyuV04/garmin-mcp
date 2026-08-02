@@ -7,6 +7,7 @@ import {
   defineTool,
   daysAgo,
   firstDeviceEntry,
+  km,
   problem,
   round,
   text,
@@ -36,9 +37,6 @@ const TARGET_TYPES = {
   'heart.rate.zone': 4,
   'pace.zone': 6
 } as const;
-
-const km = (meters: number | null | undefined) =>
-  typeof meters === 'number' ? round(meters / 1000, 1) : undefined;
 
 const targetSchema = z.object({
   type: z

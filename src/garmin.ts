@@ -99,6 +99,21 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   return client.client.post<T>(`${GC_API}${path}`, body);
 }
 
+/** PUT to a Garmin Connect API path. Used for activity edits. */
+export async function apiPut<T>(path: string, body: unknown): Promise<T> {
+  const client = await getGarminClient();
+  return client.client.put<T>(`${GC_API}${path}`, body);
+}
+
+/** GET a binary payload (activity file exports) rather than JSON. */
+export async function apiDownload(path: string): Promise<Buffer> {
+  const client = await getGarminClient();
+  const data = await client.client.get<ArrayBuffer>(`${GC_API}${path}`, {
+    responseType: 'arraybuffer'
+  });
+  return Buffer.from(data);
+}
+
 let profile: Promise<{ displayName: string; profileId: number }> | undefined;
 
 function getProfile() {
