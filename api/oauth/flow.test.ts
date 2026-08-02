@@ -78,6 +78,7 @@ const registerHandler = require('./register').default;
 const authorizeHandler = require('./authorize').default;
 const callbackHandler = require('../auth/callback').default;
 const tokenHandler = require('./token').default;
+const resumeHandler = require('../auth/resume').default;
 const { verifyJwt, resourceUrl } = require('../../src/oauth') as typeof import('../../src/oauth');
 
 type Captured = { code: number; body: any; text: string; headers: Record<string, string> };
@@ -151,6 +152,8 @@ const stateFrom = (html: string) => {
   assert.equal(mismatch.headers.location, undefined, 'must NOT redirect an unverified uri');
 
   // --- sign-in is refused for anyone not on the allowlist -------------------
+  // Refused, but still answered: a client left waiting on a rendered page has
+  // no way to learn the flow ended, which reads as a permanent hang.
   let auth = await call(authorizeHandler, { method: 'GET', query: authQuery });
   assert.equal(auth.code, 200);
   nextGoogleUser = { sub: '999', email: 'stranger@example.com', verified: true };
@@ -158,17 +161,27 @@ const stateFrom = (html: string) => {
     method: 'GET',
     query: { code: 'g-code', state: stateFrom(auth.text) }
   });
-  assert.equal(cb.code, 403, 'allowlist keeps strangers out');
-  assert.equal(cb.headers.location, undefined, 'no authorization code for a stranger');
+  assert.equal(cb.code, 302, 'the waiting client is told the flow failed');
+  const denied = new URL(cb.headers.location);
+  assert.equal(denied.searchParams.get('error'), 'access_denied');
+  assert.equal(denied.searchParams.get('code'), null, 'no authorization code for a stranger');
+  assert.equal(denied.searchParams.get('state'), 'st-123', 'state still round-trips');
 
   // --- an unverified Google email is refused --------------------------------
+  // The allowlist is keyed on email, so an address the account has not proven
+  // it owns must not be honoured.
   auth = await call(authorizeHandler, { method: 'GET', query: authQuery });
   nextGoogleUser = { sub: '111', email: 'you@example.com', verified: false };
   cb = await call(callbackHandler, {
     method: 'GET',
     query: { code: 'g-code', state: stateFrom(auth.text) }
   });
-  assert.equal(cb.code, 401, 'unverified email refused');
+  assert.equal(cb.code, 302, 'unverified email refused, and the client is told');
+  assert.equal(
+    new URL(cb.headers.location).searchParams.get('error'),
+    'access_denied',
+    'no code issued for an unverified address'
+  );
 
   // --- a replayed state is refused ------------------------------------------
   auth = await call(authorizeHandler, { method: 'GET', query: authQuery });
@@ -182,17 +195,52 @@ const stateFrom = (html: string) => {
   assert.equal(replay.code, 400, 'state is single use');
 
   // --- signed in, but no Garmin linked yet ----------------------------------
+  // This is the state that stranded a real user: the flow cannot complete, so
+  // it must offer a way to finish here rather than rendering a dead end.
   auth = await call(authorizeHandler, { method: 'GET', query: authQuery });
+  const strandedState = stateFrom(auth.text);
   cb = await call(callbackHandler, {
     method: 'GET',
-    query: { code: 'g-code', state: stateFrom(auth.text) }
+    query: { code: 'g-code', state: strandedState }
   });
-  assert.equal(cb.code, 409, 'refuses to finish before Garmin is linked');
-  assert.match(cb.text, /Connect Garmin/);
+  assert.equal(cb.code, 200, 'offers the Garmin form instead of dead-ending');
+  assert.match(cb.text, /Claude is waiting for this/, 'explains why they are here');
+  assert.match(cb.text, /var REQUEST_ID = "/, 'carries the pending request so it can resume');
+  assert.equal(cb.headers.location, undefined, 'no code issued without Garmin linked');
+
+  // Resuming without a linked Garmin account must still refuse.
+  const strandedToken = /var TOKEN = "([^"]+)"/.exec(cb.text)![1];
+  const pendingId = /var REQUEST_ID = "([^"]+)"/.exec(cb.text)![1];
+  let resumed = await call(resumeHandler, {
+    method: 'POST',
+    headers: { host: HOST, authorization: `Bearer ${strandedToken}` },
+    body: { request_id: pendingId }
+  });
+  assert.equal(resumed.code, 409, 'cannot resume before Garmin is linked');
 
   // --- link Garmin for both people, under their own ids ---------------------
   store.set('garmin:tokens:google_111', JSON.stringify({ oauth1: { oauth_token: 'yours' } }));
   store.set('garmin:tokens:google_222', JSON.stringify({ oauth1: { oauth_token: 'dads' } }));
+
+  // Now that Garmin exists, the stranded attempt finishes without starting over.
+  resumed = await call(resumeHandler, {
+    method: 'POST',
+    headers: { host: HOST, authorization: `Bearer ${strandedToken}` },
+    body: { request_id: pendingId }
+  });
+  assert.equal(resumed.code, 200, 'resume completes the waiting authorization');
+  const resumeUrl = new URL(resumed.body.redirect);
+  assert.equal(resumeUrl.origin + resumeUrl.pathname, REDIRECT, 'returns to the client');
+  assert.ok(resumeUrl.searchParams.get('code'), 'carries an authorization code');
+  assert.equal(resumeUrl.searchParams.get('state'), 'st-123');
+
+  // Resume needs a real sign-in, not just a request id.
+  const noAuth = await call(resumeHandler, {
+    method: 'POST',
+    headers: { host: HOST },
+    body: { request_id: pendingId }
+  });
+  assert.equal(noAuth.code, 401, 'anonymous resume refused');
 
   async function fullFlow(user: { sub: string; email: string }) {
     nextGoogleUser = { ...user, verified: true };

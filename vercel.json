@@ -2,13 +2,38 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
   "rewrites": [
-    { "source": "/", "destination": "/api/connect" },
-    { "source": "/connect", "destination": "/api/connect" },
-    { "source": "/mcp", "destination": "/api/mcp" },
-    { "source": "/authorize", "destination": "/api/oauth/authorize" },
-    { "source": "/token", "destination": "/api/oauth/token" },
-    { "source": "/register", "destination": "/api/oauth/register" },
-    { "source": "/auth/callback", "destination": "/api/auth/callback" },
+    {
+      "source": "/",
+      "destination": "/api/connect"
+    },
+    {
+      "source": "/connect",
+      "destination": "/api/connect"
+    },
+    {
+      "source": "/mcp",
+      "destination": "/api/mcp"
+    },
+    {
+      "source": "/authorize",
+      "destination": "/api/oauth/authorize"
+    },
+    {
+      "source": "/token",
+      "destination": "/api/oauth/token"
+    },
+    {
+      "source": "/register",
+      "destination": "/api/oauth/register"
+    },
+    {
+      "source": "/auth/callback",
+      "destination": "/api/auth/callback"
+    },
+    {
+      "source": "/auth/resume",
+      "destination": "/api/auth/resume"
+    },
     {
       "source": "/.well-known/oauth-authorization-server",
       "destination": "/api/oauth/metadata"
@@ -22,9 +47,18 @@
     {
       "source": "/(.*)",
       "headers": [
-        { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "X-Frame-Options", "value": "DENY" },
-        { "key": "Referrer-Policy", "value": "no-referrer" },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        },
         {
           "key": "Content-Security-Policy",
           "value": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
@@ -33,7 +67,12 @@
     },
     {
       "source": "/api/(.*)",
-      "headers": [{ "key": "Cache-Control", "value": "no-store, max-age=0" }]
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store, max-age=0"
+        }
+      ]
     }
   ]
 }
