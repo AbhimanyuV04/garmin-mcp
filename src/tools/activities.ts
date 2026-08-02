@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { api, apiDownload, apiPut } from '../garmin';
+import type { GarminSession } from '../garmin';
 import {
   compact,
   defineTool,
@@ -44,7 +44,7 @@ const DOWNLOADS = {
   gpx: { path: '/download-service/export/gpx/activity', ext: 'gpx' }
 } as const;
 
-export function registerActivityTools(server: McpServer): void {
+export function registerActivityTools(server: McpServer, g: GarminSession): void {
   defineTool(
     server,
     'list_activities',
@@ -58,7 +58,7 @@ export function registerActivityTools(server: McpServer): void {
         .describe('Garmin type key filter, e.g. running, cycling, swimming, strength_training.')
     },
     async ({ limit, start, activityType }) => {
-      const activities = await api<any[]>(`/activitylist-service/activities/search/activities`, {
+      const activities = await g.api<any[]>(`/activitylist-service/activities/search/activities`, {
         start: String(start ?? 0),
         limit: String(limit ?? 10),
         ...(activityType ? { activityType } : {})
@@ -103,10 +103,10 @@ export function registerActivityTools(server: McpServer): void {
       // per-second time-series (megabytes). Summary, splits and zones carry
       // everything a reader actually needs.
       const [activity, splits, hrZones, powerZones] = await Promise.all([
-        api<any>(`${ACTIVITY_PATH}/${id}`),
-        api<any>(`${ACTIVITY_PATH}/${id}/splits`).catch(() => null),
-        api<any>(`${ACTIVITY_PATH}/${id}/hrTimeInZones`).catch(() => null),
-        api<any>(`${ACTIVITY_PATH}/${id}/powerTimeInZones`).catch(() => null)
+        g.api<any>(`${ACTIVITY_PATH}/${id}`),
+        g.api<any>(`${ACTIVITY_PATH}/${id}/splits`).catch(() => null),
+        g.api<any>(`${ACTIVITY_PATH}/${id}/hrTimeInZones`).catch(() => null),
+        g.api<any>(`${ACTIVITY_PATH}/${id}/powerTimeInZones`).catch(() => null)
       ]);
 
       if (!activity) return problem(`No activity found with id ${id}.`);
@@ -227,7 +227,7 @@ export function registerActivityTools(server: McpServer): void {
         summaryDTO: Object.keys(summaryDTO).length ? summaryDTO : undefined
       });
 
-      await apiPut(`${ACTIVITY_PATH}/${id}`, payload);
+      await g.apiPut(`${ACTIVITY_PATH}/${id}`, payload);
 
       return text({
         activity_id: id,
@@ -252,7 +252,7 @@ export function registerActivityTools(server: McpServer): void {
     },
     async ({ activityId: id, format, directory }) => {
       const { path, ext } = DOWNLOADS[format];
-      const data = await apiDownload(`${path}/${id}`);
+      const data = await g.apiDownload(`${path}/${id}`);
 
       if (!data.length) {
         return problem(`Garmin returned an empty ${format} file for activity ${id}.`);

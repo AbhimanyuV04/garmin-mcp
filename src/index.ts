@@ -1,18 +1,13 @@
 #!/usr/bin/env node
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { registerActivityTools } from './tools/activities';
-import { registerHealthTools } from './tools/health';
-import { registerTrainingTools } from './tools/training';
-
-const server = new McpServer({ name: 'garmin-mcp', version: '0.1.0' });
-
-registerHealthTools(server);
-registerTrainingTools(server);
-registerActivityTools(server);
+import { GarminSession } from './garmin';
+import { createServer } from './server';
 
 async function main() {
-  await server.connect(new StdioServerTransport());
+  // Local stdio serves exactly one user, so one session for the process life is
+  // correct here — unlike the hosted transport, which builds one per request.
+  const session = await GarminSession.create();
+  await createServer(session).connect(new StdioServerTransport());
 }
 
 main().catch((err) => {

@@ -1,7 +1,5 @@
 import { GarminConnect } from 'garmin-connect';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { GarminTokens, LOCAL_USER, loadTokens, saveTokens } from './db';
 
 // Node's built-in .env loader (20.12+). MCP clients normally pass config via
 // their own `env` block, so a missing file is the common case, not an error.
@@ -11,128 +9,126 @@ try {
   /* no .env present */
 }
 
-export type IGarminTokens = ReturnType<GarminConnect['exportToken']>;
-
-export const TOKEN_PATH =
-  process.env.GARMIN_TOKEN_PATH ?? join(homedir(), '.garmin-mcp', 'tokens.json');
-
-export function encodeTokens(tokens: IGarminTokens): string {
-  return Buffer.from(JSON.stringify(tokens)).toString('base64');
-}
-
-export function decodeTokens(b64: string): IGarminTokens {
-  const parsed = JSON.parse(Buffer.from(b64, 'base64').toString('utf8'));
-  if (!parsed?.oauth1?.oauth_token || !parsed?.oauth2?.access_token) {
-    throw new Error('Malformed Garmin tokens: missing oauth1/oauth2 fields');
-  }
-  return parsed as IGarminTokens;
-}
-
-export function saveTokens(tokens: IGarminTokens, path = TOKEN_PATH): void {
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  writeFileSync(path, JSON.stringify(tokens, null, 2), { mode: 0o600 });
-  // Tokens are ~1yr bearer credentials to the whole Garmin account.
-  chmodSync(path, 0o600);
-}
-
-// Env var wins so Vercel/KV deploys need no filesystem.
-function loadTokens(path = TOKEN_PATH): IGarminTokens | null {
-  const fromEnv = process.env.GARMIN_TOKENS_BASE64;
-  if (fromEnv) return decodeTokens(fromEnv);
-  if (!existsSync(path)) return null;
-  return JSON.parse(readFileSync(path, 'utf8')) as IGarminTokens;
-}
-
-async function loginWithCredentials(): Promise<GarminConnect> {
-  const username = process.env.GARMIN_EMAIL;
-  const password = process.env.GARMIN_PASSWORD;
-  if (!username || !password) {
-    throw new Error(
-      `No cached tokens at ${TOKEN_PATH} and GARMIN_EMAIL/GARMIN_PASSWORD are unset.\n` +
-        `Run \`npm run auth\` once to log in and cache tokens.`
-    );
-  }
-  const client = new GarminConnect({ username, password });
-  await client.login();
-  saveTokens(client.exportToken());
-  return client;
-}
-
-let cached: Promise<GarminConnect> | undefined;
-
-/** Authenticated Garmin client. Uses cached tokens, falls back to a fresh login. */
-export function getGarminClient(): Promise<GarminConnect> {
-  cached ??= (async () => {
-    const tokens = loadTokens();
-    if (!tokens) return loginWithCredentials();
-
-    const client = new GarminConnect({ username: '', password: '' });
-    client.loadToken(tokens.oauth1, tokens.oauth2);
-    try {
-      await client.getUserProfile();
-      return client;
-    } catch {
-      // oauth1 is good for ~1yr; if it is dead too, only credentials can recover.
-      return loginWithCredentials();
-    }
-  })();
-  return cached;
-}
-
 const GC_API = 'https://connectapi.garmin.com';
 
+export class GarminAuthError extends Error {}
+
 /**
- * GET a Garmin Connect API path. The library wraps only sleep/HR/steps/weight,
- * so everything else goes through here — it still rides the library's auth
- * headers and oauth2 refresh interceptor.
+ * One user's authenticated view of Garmin.
+ *
+ * Deliberately NOT a module-level singleton. A hosted server handles many users
+ * on one warm instance, and a shared client would serve whichever account
+ * happened to log in first — leaking one person's health data to another.
+ * Build one of these per request and let it fall out of scope.
  */
-// ponytail: all tools use this one path rather than the library's typed getters
-// for the two it covers, so there is a single error surface to handle.
-export async function api<T>(path: string, params?: Record<string, string>): Promise<T> {
-  const client = await getGarminClient();
-  return client.client.get<T>(`${GC_API}${path}`, params ? { params } : undefined);
+export class GarminSession {
+  private profile?: Promise<{ displayName: string; profileId: number }>;
+
+  private constructor(
+    readonly userId: string,
+    private readonly client: GarminConnect,
+    /** access_token as loaded, used to detect a background refresh. */
+    private lastAccessToken: string | undefined
+  ) {}
+
+  static async create(userId: string = LOCAL_USER): Promise<GarminSession> {
+    const tokens = await loadTokens(userId);
+    if (!tokens) {
+      throw new GarminAuthError(
+        userId === LOCAL_USER
+          ? 'No Garmin tokens found. Run `npm run auth` to sign in.'
+          : `No Garmin tokens stored for this account. Connect Garmin before using these tools.`
+      );
+    }
+    const client = new GarminConnect({ username: '', password: '' });
+    client.loadToken(tokens.oauth1, tokens.oauth2);
+    return new GarminSession(userId, client, accessTokenOf(tokens));
+  }
+
+  /** Builds a session from tokens already in hand, e.g. straight after login. */
+  static fromTokens(userId: string, tokens: GarminTokens): GarminSession {
+    const client = new GarminConnect({ username: '', password: '' });
+    client.loadToken(tokens.oauth1, tokens.oauth2);
+    return new GarminSession(userId, client, accessTokenOf(tokens));
+  }
+
+  /**
+   * The library's axios interceptor refreshes the oauth2 token in memory when
+   * it expires. On a serverless instance that memory dies with the request, so
+   * write the new token back or every cold start pays for a refresh.
+   */
+  private async persistIfRefreshed(): Promise<void> {
+    try {
+      const current = this.client.exportToken();
+      const token = accessTokenOf(current);
+      if (token && token !== this.lastAccessToken) {
+        this.lastAccessToken = token;
+        await saveTokens(this.userId, current);
+      }
+    } catch {
+      // A failed write must not fail the user's actual request.
+    }
+  }
+
+  async api<T>(path: string, params?: Record<string, string>): Promise<T> {
+    const result = await this.client.client.get<T>(
+      `${GC_API}${path}`,
+      params ? { params } : undefined
+    );
+    await this.persistIfRefreshed();
+    return result;
+  }
+
+  async apiPost<T>(path: string, body: unknown): Promise<T> {
+    const result = await this.client.client.post<T>(`${GC_API}${path}`, body);
+    await this.persistIfRefreshed();
+    return result;
+  }
+
+  async apiPut<T>(path: string, body: unknown): Promise<T> {
+    const result = await this.client.client.put<T>(`${GC_API}${path}`, body);
+    await this.persistIfRefreshed();
+    return result;
+  }
+
+  /** GET a binary payload (activity file exports) rather than JSON. */
+  async apiDownload(path: string): Promise<Buffer> {
+    const data = await this.client.client.get<ArrayBuffer>(`${GC_API}${path}`, {
+      responseType: 'arraybuffer'
+    });
+    await this.persistIfRefreshed();
+    return Buffer.from(data);
+  }
+
+  /** Memoized per session, never across users. */
+  private getProfile() {
+    this.profile ??= this.client
+      .getUserProfile()
+      .then((p) => ({ displayName: p.displayName, profileId: p.profileId as number }));
+    return this.profile;
+  }
+
+  /** Several wellness endpoints are keyed by display name rather than user id. */
+  async getDisplayName(): Promise<string> {
+    return (await this.getProfile()).displayName;
+  }
+
+  /** Gear endpoints key off the numeric profile id, not the display name. */
+  async getProfileId(): Promise<number> {
+    return (await this.getProfile()).profileId;
+  }
+
+  /** Cheap authenticated call; confirms the stored tokens still work. */
+  async verify(): Promise<boolean> {
+    try {
+      await this.getDisplayName();
+      return true;
+    } catch {
+      return false;
+    }
+  }
 }
 
-/** POST to a Garmin Connect API path. Used for workout creation. */
-export async function apiPost<T>(path: string, body: unknown): Promise<T> {
-  const client = await getGarminClient();
-  return client.client.post<T>(`${GC_API}${path}`, body);
+function accessTokenOf(tokens: GarminTokens): string | undefined {
+  return (tokens.oauth2 as { access_token?: string })?.access_token;
 }
-
-/** PUT to a Garmin Connect API path. Used for activity edits. */
-export async function apiPut<T>(path: string, body: unknown): Promise<T> {
-  const client = await getGarminClient();
-  return client.client.put<T>(`${GC_API}${path}`, body);
-}
-
-/** GET a binary payload (activity file exports) rather than JSON. */
-export async function apiDownload(path: string): Promise<Buffer> {
-  const client = await getGarminClient();
-  const data = await client.client.get<ArrayBuffer>(`${GC_API}${path}`, {
-    responseType: 'arraybuffer'
-  });
-  return Buffer.from(data);
-}
-
-let profile: Promise<{ displayName: string; profileId: number }> | undefined;
-
-function getProfile() {
-  profile ??= getGarminClient()
-    .then((c) => c.getUserProfile())
-    .then((p) => ({ displayName: p.displayName, profileId: p.profileId as number }));
-  return profile;
-}
-
-/** Several wellness endpoints are keyed by display name rather than user id. */
-export async function getDisplayName(): Promise<string> {
-  return (await getProfile()).displayName;
-}
-
-/** Gear endpoints key off the numeric profile id, not the display name. */
-export async function getProfileId(): Promise<number> {
-  return (await getProfile()).profileId;
-}
-
-// ponytail: the library's axios interceptor refreshes oauth2 in-memory on expiry,
-// so a refreshed access_token is not written back — it just re-refreshes next start.
-// Persist on refresh only if startup latency becomes a problem.

@@ -1,6 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 import { GarminConnect } from 'garmin-connect';
-import { encodeTokens } from '../src/garmin';
+import { encodeTokens } from '../src/db';
 
 // Structural types instead of @vercel/node: that package is types-only for this
 // handler but drags in a dev tree with known advisories. Vercel supplies the

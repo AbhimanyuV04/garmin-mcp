@@ -1,6 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { api, apiPost, getProfileId } from '../garmin';
+import type { GarminSession } from '../garmin';
 import {
   compact,
   dateSchema,
@@ -147,7 +147,7 @@ export function buildWorkoutPayload(
   };
 }
 
-export function registerTrainingTools(server: McpServer): void {
+export function registerTrainingTools(server: McpServer, g: GarminSession): void {
   defineTool(
     server,
     'get_training_status',
@@ -158,9 +158,9 @@ export function registerTrainingTools(server: McpServer): void {
       // Fitness age and VO2 max live in separate services; a watch that reports
       // neither is common, so only the status call is allowed to fail the tool.
       const [status, fitnessAge, maxMet] = await Promise.all([
-        api<any>(`/metrics-service/metrics/trainingstatus/aggregated/${day}`),
-        api<any>(`/fitnessage-service/fitnessage/${day}`).catch(() => null),
-        api<any>(`/metrics-service/metrics/maxmet/daily/${day}/${day}`).catch(() => null)
+        g.api<any>(`/metrics-service/metrics/trainingstatus/aggregated/${day}`),
+        g.api<any>(`/fitnessage-service/fitnessage/${day}`).catch(() => null),
+        g.api<any>(`/metrics-service/metrics/maxmet/daily/${day}/${day}`).catch(() => null)
       ]);
 
       if (!status) return problem(`No training status available for ${day}.`);
@@ -222,7 +222,7 @@ export function registerTrainingTools(server: McpServer): void {
     { date: dateSchema.optional().describe('YYYY-MM-DD. Defaults to today.') },
     async ({ date }) => {
       const day = date ?? today();
-      const raw = await api<any>(`/hrv-service/hrv/${day}`);
+      const raw = await g.api<any>(`/hrv-service/hrv/${day}`);
       const summary = raw?.hrvSummary;
       if (!summary) {
         return problem(
@@ -258,14 +258,14 @@ export function registerTrainingTools(server: McpServer): void {
       // cyclists. Every one of these is hardware or history dependent.
       const range = `${daysAgo(365)}/${today()}`;
       const [ftp, powerZones, ltHr, ltSpeed] = await Promise.all([
-        api<any>('/biometric-service/biometric/latestFunctionalThresholdPower/CYCLING').catch(
+        g.api<any>('/biometric-service/biometric/latestFunctionalThresholdPower/CYCLING').catch(
           () => null
         ),
-        api<any>('/biometric-service/powerZones/sports/all').catch(() => null),
-        api<any>(
+        g.api<any>('/biometric-service/powerZones/sports/all').catch(() => null),
+        g.api<any>(
           `/biometric-service/stats/lactateThresholdHeartRate/range/${range}?sport=RUNNING&aggregation=daily&aggregationStrategy=LATEST`
         ).catch(() => null),
-        api<any>(
+        g.api<any>(
           `/biometric-service/stats/lactateThresholdSpeed/range/${range}?sport=RUNNING&aggregation=daily&aggregationStrategy=LATEST`
         ).catch(() => null)
       ]);
@@ -333,35 +333,38 @@ export function registerTrainingTools(server: McpServer): void {
       const now = new Date();
 
       const [workouts, plans, gear, calendar] = await Promise.all([
-        api<any[]>('/workout-service/workouts', { start: '0', limit: String(max) }).catch(() => null),
-        api<any>('/trainingplan-service/trainingplan/plans').catch(() => null),
-        api<any[]>('/gear-service/gear/filterGear', {
-          userProfilePk: String(await getProfileId())
+        g.api<any[]>('/workout-service/workouts', { start: '0', limit: String(max) }).catch(() => null),
+        g.api<any>('/trainingplan-service/trainingplan/plans').catch(() => null),
+        g.api<any[]>('/gear-service/gear/filterGear', {
+          userProfilePk: String(await g.getProfileId())
         }).catch(() => null),
         // Calendar months are 0-indexed in this service.
-        api<any>(`/calendar-service/year/${now.getFullYear()}/month/${now.getMonth()}`).catch(
+        g.api<any>(`/calendar-service/year/${now.getFullYear()}/month/${now.getMonth()}`).catch(
           () => null
         )
       ]);
 
       // Gear mileage lives in a separate stats call keyed by gear uuid.
-      const gearList = (gear ?? []).filter((g: any) =>
-        onlyActive ? g?.gearStatusName?.toLowerCase() !== 'retired' : true
+      // Named `item`, not `g`: `g` is the Garmin session in this scope.
+      const gearList = (gear ?? []).filter((item: any) =>
+        onlyActive ? item?.gearStatusName?.toLowerCase() !== 'retired' : true
       );
       const gearWithStats = await Promise.all(
-        gearList.map(async (g: any) => {
-          const stats = await api<any>(`/gear-service/gear/stats/${g.uuid}`).catch(() => null);
+        gearList.map(async (item: any) => {
+          const stats = await g
+            .api<any>(`/gear-service/gear/stats/${item.uuid}`)
+            .catch(() => null);
           return compact({
-            name: g.displayName ?? g.customMakeModel,
-            type: g.gearTypeName,
-            status: g.gearStatusName,
+            name: item.displayName ?? item.customMakeModel,
+            type: item.gearTypeName,
+            status: item.gearStatusName,
             total_distance_km: km(stats?.totalDistance),
             total_activities: stats?.totalActivities,
             // Shoes carry a retirement threshold; bikes usually don't.
-            retire_at_km: km(g.maximumMeters),
+            retire_at_km: km(item.maximumMeters),
             percent_of_life_used:
-              stats?.totalDistance && g.maximumMeters
-                ? round((stats.totalDistance / g.maximumMeters) * 100)
+              stats?.totalDistance && item.maximumMeters
+                ? round((stats.totalDistance / item.maximumMeters) * 100)
                 : undefined
           });
         })
@@ -427,7 +430,7 @@ export function registerTrainingTools(server: McpServer): void {
       if (invalid) return problem(invalid);
 
       const payload = buildWorkoutPayload(title, sport, steps);
-      const created = await apiPost<any>('/workout-service/workout', payload);
+      const created = await g.apiPost<any>('/workout-service/workout', payload);
 
       return text({
         workout_id: created?.workoutId,

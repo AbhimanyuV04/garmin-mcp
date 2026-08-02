@@ -1,5 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { api, getDisplayName } from '../garmin';
+import type { GarminSession } from '../garmin';
 import {
   compact,
   dateSchema,
@@ -15,7 +15,7 @@ import {
   today
 } from './common';
 
-export function registerHealthTools(server: McpServer): void {
+export function registerHealthTools(server: McpServer, g: GarminSession): void {
   defineTool(
     server,
     'get_sleep_data',
@@ -23,7 +23,7 @@ export function registerHealthTools(server: McpServer): void {
     { date: dateSchema.optional().describe('YYYY-MM-DD. Defaults to today.') },
     async ({ date }) => {
       const day = date ?? today();
-      const raw = await api<any>('/wellness-service/wellness/dailySleepData', {
+      const raw = await g.api<any>('/wellness-service/wellness/dailySleepData', {
         date: day,
         nonSleepBufferMinutes: '60'
       });
@@ -79,8 +79,8 @@ export function registerHealthTools(server: McpServer): void {
     { date: dateSchema.optional().describe('YYYY-MM-DD. Defaults to today.') },
     async ({ date }) => {
       const day = date ?? today();
-      const raw = await api<any>(
-        `/wellness-service/wellness/dailyHeartRate/${await getDisplayName()}`,
+      const raw = await g.api<any>(
+        `/wellness-service/wellness/dailyHeartRate/${await g.getDisplayName()}`,
         { date: day }
       );
       if (!raw || raw.restingHeartRate == null) {
@@ -116,13 +116,13 @@ export function registerHealthTools(server: McpServer): void {
     async ({ date }) => {
       const day = date ?? today();
       const [days, stress] = await Promise.all([
-        api<any[]>('/wellness-service/wellness/bodyBattery/reports/daily', {
+        g.api<any[]>('/wellness-service/wellness/bodyBattery/reports/daily', {
           startDate: day,
           endDate: day
         }),
         // Stress shares the body battery engine, so pair them; a failure here
         // must not sink the whole tool.
-        api<any>(`/wellness-service/wellness/dailyStress/${day}`).catch(() => null)
+        g.api<any>(`/wellness-service/wellness/dailyStress/${day}`).catch(() => null)
       ]);
 
       const report = days?.[0];
@@ -185,9 +185,9 @@ export function registerHealthTools(server: McpServer): void {
       // Respiration and SpO2 are hardware-dependent — many watches report
       // neither, so a miss on those is normal rather than an error.
       const [stress, respiration, spo2] = await Promise.all([
-        api<any>(`/wellness-service/wellness/dailyStress/${day}`).catch(() => null),
-        api<any>(`/wellness-service/wellness/daily/respiration/${day}`).catch(() => null),
-        api<any>(`/wellness-service/wellness/daily/spo2/${day}`).catch(() => null)
+        g.api<any>(`/wellness-service/wellness/dailyStress/${day}`).catch(() => null),
+        g.api<any>(`/wellness-service/wellness/daily/respiration/${day}`).catch(() => null),
+        g.api<any>(`/wellness-service/wellness/daily/spo2/${day}`).catch(() => null)
       ]);
 
       if (!stress && !respiration && !spo2) {
@@ -235,8 +235,8 @@ export function registerHealthTools(server: McpServer): void {
     { date: dateSchema.optional().describe('YYYY-MM-DD. Defaults to today.') },
     async ({ date }) => {
       const day = date ?? today();
-      const raw = await api<any>(
-        `/usersummary-service/usersummary/daily/${await getDisplayName()}`,
+      const raw = await g.api<any>(
+        `/usersummary-service/usersummary/daily/${await g.getDisplayName()}`,
         { calendarDate: day }
       );
       if (!raw || raw.privacyProtected === true) {
@@ -286,7 +286,7 @@ export function registerHealthTools(server: McpServer): void {
       const start = startDate ?? daysAgo(30);
       if (start > end) return problem(`startDate ${start} is after endDate ${end}.`);
 
-      const raw = await api<any>('/weight-service/weight/dateRange', {
+      const raw = await g.api<any>('/weight-service/weight/dateRange', {
         startDate: start,
         endDate: end
       });

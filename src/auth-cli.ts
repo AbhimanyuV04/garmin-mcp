@@ -2,7 +2,7 @@
 import { GarminConnect } from 'garmin-connect';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
-import { TOKEN_PATH, saveTokens, encodeTokens } from './garmin';
+import { LOCAL_USER, TOKEN_PATH, saveTokens, encodeTokens } from './db';
 
 async function prompt(question: string, hidden = false): Promise<string> {
   const rl = createInterface({ input: stdin, output: stdout, terminal: true });
@@ -32,7 +32,7 @@ async function main() {
 
   const name = (await client.getUserProfile()).displayName;
   const tokens = client.exportToken();
-  saveTokens(tokens);
+  await saveTokens(LOCAL_USER, tokens);
 
   console.log(`\n✓ Logged in as ${name}`);
   console.log(`✓ Tokens saved to ${TOKEN_PATH}`);

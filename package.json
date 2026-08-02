@@ -9,10 +9,11 @@
   "scripts": {
     "build": "tsc && tsc -p tsconfig.api.json",
     "auth": "tsc && node dist/auth-cli.js",
-    "test": "npm run build && node dist/garmin.test.js && node dist/tools/common.test.js && node dist/tools/training.test.js && node dist-api/api/token.test.js"
+    "test": "npm run build && node dist/db.test.js && node dist/tools/common.test.js && node dist/tools/training.test.js && node dist-api/api/token.test.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.28.0",
+    "@upstash/redis": "^1.38.1",
     "garmin-connect": "^1.6.2",
     "zod": "^4.4.3"
   },
