@@ -52,6 +52,21 @@ function redis() {
 export const isHosted = () => redis() !== null;
 
 /**
+ * OAuth state (codes, pending requests, refresh tokens) has no file fallback:
+ * it is inherently multi-request and serverless instances share no memory, so
+ * a local-file mode would silently break rather than degrade.
+ */
+export function requireRedis() {
+  const store = redis();
+  if (!store) {
+    throw new Error(
+      'This endpoint needs Redis. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN.'
+    );
+  }
+  return store;
+}
+
+/**
  * Seconds until the refresh token dies. Garmin tokens are useless past that
  * point, so let Redis expire them rather than keeping dead credentials around.
  */
