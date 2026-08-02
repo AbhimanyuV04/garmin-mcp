@@ -1,0 +1,25 @@
+{
+  "name": "garmin-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for Garmin Connect health and activity data",
+  "bin": {
+    "garmin-mcp": "./dist/index.js",
+    "garmin-mcp-auth": "./dist/auth-cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "auth": "tsc && node dist/auth-cli.js",
+    "test": "tsc && node dist/garmin.test.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.28.0",
+    "garmin-connect": "^1.6.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
