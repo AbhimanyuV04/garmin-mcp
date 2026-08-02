@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "outputDirectory": "public",
   "rewrites": [
     { "source": "/mcp", "destination": "/api/mcp" },
     { "source": "/authorize", "destination": "/api/oauth/authorize" },

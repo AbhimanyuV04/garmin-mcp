@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "MCP server for Garmin Connect health and activity data",
   "bin": {
-    "garmin-mcp": "./dist/index.js",
+    "garmin-mcp": "./dist/stdio.js",
     "garmin-mcp-auth": "./dist/auth-cli.js"
   },
   "scripts": {

@@ -43,7 +43,7 @@ Nothing secret goes in the config; the server reads `~/.garmin-mcp/tokens.json`.
   "mcpServers": {
     "garmin": {
       "command": "node",
-      "args": ["C:\\Users\\abhim\\Documents\\garmin-mcp\\dist\\index.js"]
+      "args": ["C:\\Users\\abhim\\Documents\\garmin-mcp\\dist\\stdio.js"]
     }
   }
 }
@@ -56,7 +56,7 @@ On macOS the path is plain, with no escaping:
   "mcpServers": {
     "garmin": {
       "command": "node",
-      "args": ["/Users/you/garmin-mcp/dist/index.js"]
+      "args": ["/Users/you/garmin-mcp/dist/stdio.js"]
     }
   }
 }
@@ -73,7 +73,7 @@ printed by `npm run auth`.
   "mcpServers": {
     "garmin": {
       "command": "node",
-      "args": ["C:\\Users\\abhim\\Documents\\garmin-mcp\\dist\\index.js"],
+      "args": ["C:\\Users\\abhim\\Documents\\garmin-mcp\\dist\\stdio.js"],
       "env": {
         "GARMIN_TOKENS_BASE64": "eyJvYXV0aDEiOnsi..."
       }
@@ -93,7 +93,7 @@ Restart Claude Desktop after editing. The tools appear under the plug icon.
 
 - **Use an absolute path.** Claude Desktop does not run the server from your
   project directory, so a relative path won't resolve.
-- **Run `npm run build` first.** The config points at `dist/index.js`, not the
+- **Run `npm run build` first.** The config points at `dist/stdio.js`, not the
   TypeScript source.
 - **Check `node` is on the GUI PATH.** Claude Desktop launches with a minimal
   environment, not your shell's. If `node` isn't found, use its full path

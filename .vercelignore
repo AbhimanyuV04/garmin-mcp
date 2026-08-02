@@ -1,0 +1,8 @@
+# Anything under api/ becomes a public serverless route, so test files would
+# deploy as reachable endpoints that run assertions and call process.exit().
+*.test.ts
+**/*.test.ts
+
+# Build output is produced on Vercel; uploading it just slows the deploy.
+dist/
+dist-api/
