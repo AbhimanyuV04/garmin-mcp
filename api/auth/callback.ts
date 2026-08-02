@@ -1,5 +1,5 @@
-import { loadTokens } from '../../src/db';
-import { exchangeCode, isAllowed, userIdFor } from '../../src/google';
+import { grantAccess, hasAccess, loadTokens, maxUsers } from '../../src/db';
+import { exchangeCode, isAllowed, userIdFor, validInvite } from '../../src/google';
 import {
   DEPOSIT_TTL,
   depositAudience,
@@ -70,17 +70,33 @@ export default async function handler(req: Req, res: Res) {
     return html(res, 401, page('Sign-in failed', esc(message)));
   }
 
-  // The allowlist is what keeps this from being an open service that stores
-  // strangers' health data.
-  if (!isAllowed(identity.email)) {
-    if (bounce('access_denied', `${identity.email} is not permitted to use this server.`)) return;
+  // Three ways in, all of them closed by default: named on the allowlist,
+  // already admitted by an invite, or presenting a valid invite now. Without
+  // one of these the deployment would store strangers' health credentials.
+  let admitted = isAllowed(identity.email) || (await hasAccess(identity.email));
+  let capped = false;
+  if (!admitted && validInvite(state.invite)) {
+    admitted = await grantAccess(identity.email);
+    // A valid code that cannot be redeemed means the cap is full; say so
+    // rather than implying the code was wrong.
+    capped = !admitted;
+  }
+
+  if (!admitted) {
+    const reason = capped
+      ? `This server has reached its limit of ${maxUsers()} people.`
+      : `${identity.email} is not permitted to use this server.`;
+    if (bounce('access_denied', reason)) return;
     return html(
       res,
       403,
       page(
-        'Not on the list',
-        `<strong>${esc(identity.email)}</strong> isn't allowed to use this server.
-         Ask the owner to add it to <code>ALLOWED_EMAILS</code>.`
+        capped ? 'Server is full' : 'Not on the list',
+        capped
+          ? `Its owner has capped it at ${maxUsers()} people. Ask them to raise
+             <code>MAX_USERS</code>, or run your own copy.`
+          : `<strong>${esc(identity.email)}</strong> isn't allowed to use this server.
+             Ask whoever runs it for an invite code, or run your own copy.`
       )
     );
   }

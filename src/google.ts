@@ -6,6 +6,8 @@
  * claim becomes their user id, which is what keys their Garmin tokens.
  */
 
+import { safeEqual } from './oauth';
+
 const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 
@@ -111,11 +113,11 @@ export async function exchangeCode(issuer: string, code: string): Promise<Google
 }
 
 /**
- * Who is allowed to use this deployment.
+ * Named on the ALLOWED_EMAILS list.
  *
- * Without this, anyone with a Google account could sign in and store their
- * Garmin credentials in your Redis — you would be running a free public health
- * data service and holding strangers' data. Fail closed when unset.
+ * Without a gate of some kind, anyone with a Google account could sign in and
+ * store their Garmin credentials in your Redis — you would be running a free
+ * public health data service and holding strangers' data. Fails closed.
  */
 export function isAllowed(email: string): boolean {
   const allowed = (process.env.ALLOWED_EMAILS ?? '')
@@ -124,6 +126,25 @@ export function isAllowed(email: string): boolean {
     .filter(Boolean);
   if (!allowed.length) return false;
   return allowed.includes(email.toLowerCase());
+}
+
+/**
+ * Whether an invite code is one this deployment issued.
+ *
+ * Lets a group self-serve without the owner adding addresses one at a time,
+ * while keeping the deployment closed: an invite is still a door, not an open
+ * doorway. Compared in constant time, and a code shorter than 8 characters is
+ * treated as unset so a weak one cannot be guessed.
+ */
+export function validInvite(code: string | undefined): boolean {
+  if (!code) return false;
+  const codes = (process.env.INVITE_CODES ?? '')
+    .split(',')
+    .map((c) => c.trim())
+    .filter((c) => c.length >= 8);
+  // reduce, not some(): checking every candidate keeps the time taken
+  // independent of how many codes match a prefix.
+  return codes.reduce((matched, candidate) => safeEqual(code, candidate) || matched, false);
 }
 
 /** Google subs are digit strings; the prefix keeps ids readable in Redis. */

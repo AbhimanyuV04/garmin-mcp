@@ -147,8 +147,8 @@ export type CodeRecord = PendingRequest & { sub: string };
  * the round trip so the callback knows where to return them.
  */
 export type LoginState =
-  | { intent: 'mcp'; requestId: string }
-  | { intent: 'connect' };
+  | { intent: 'mcp'; requestId: string; invite?: string }
+  | { intent: 'connect'; invite?: string };
 
 const k = {
   client: (id: string) => `oauth:client:${id}`,

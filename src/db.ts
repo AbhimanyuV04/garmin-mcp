@@ -107,6 +107,49 @@ export async function saveTokens(userId: string, tokens: GarminTokens): Promise<
   chmodSync(TOKEN_PATH, 0o600);
 }
 
+const accessKey = (email: string) => `access:granted:${email.trim().toLowerCase()}`;
+const ACCESS_COUNT = 'access:count';
+
+/** Ceiling on invite redemptions, so a leaked code cannot enrol the internet. */
+export const maxUsers = () => Number(process.env.MAX_USERS ?? 25);
+
+/** Has this address already redeemed an invite? Grants outlive Garmin tokens. */
+export async function hasAccess(email: string): Promise<boolean> {
+  const store = redis();
+  if (!store) return false;
+  return Boolean(await store.get(accessKey(email)));
+}
+
+export async function accessCount(): Promise<number> {
+  const store = redis();
+  if (!store) return 0;
+  return Number((await store.get(ACCESS_COUNT)) ?? 0);
+}
+
+/**
+ * Records that an address may use this deployment.
+ *
+ * Returns false once the cap is reached rather than growing without bound: an
+ * invite code shared in a group chat travels further than intended, and every
+ * extra person is another set of health credentials to be responsible for.
+ */
+export async function grantAccess(email: string): Promise<boolean> {
+  const store = redis();
+  if (!store) return false;
+  const key = accessKey(email);
+  if (await store.get(key)) return true;
+
+  if ((await accessCount()) >= maxUsers()) return false;
+  await store.set(key, '1');
+  // ponytail: read-then-increment, not atomic. A burst could overshoot the cap
+  // by a couple; use a Lua script if that ever matters.
+  await store.incr(ACCESS_COUNT);
+  return true;
+}
+
+// To remove someone, delete their access:granted:<email> key in the Upstash
+// console. That is one click and needs no endpoint of its own.
+
 export async function deleteTokens(userId: string): Promise<void> {
   const store = redis();
   if (store) {

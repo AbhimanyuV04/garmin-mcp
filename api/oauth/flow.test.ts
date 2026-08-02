@@ -79,6 +79,7 @@ const authorizeHandler = require('./authorize').default;
 const callbackHandler = require('../auth/callback').default;
 const tokenHandler = require('./token').default;
 const resumeHandler = require('../auth/resume').default;
+const connectHandler = require('../connect').default;
 const { verifyJwt, resourceUrl } = require('../../src/oauth') as typeof import('../../src/oauth');
 
 type Captured = { code: number; body: any; text: string; headers: Record<string, string> };
@@ -275,5 +276,53 @@ const stateFrom = (html: string) => {
   // The point of the whole phase: two people, two identities, two data sets.
   assert.notEqual(yours.sub, dads.sub, 'separate Google accounts get separate sessions');
 
-  console.log('✓ oauth flow ok (multi-user)');
+  // --- invite codes: a group joins without being named one at a time --------
+  process.env.INVITE_CODES = 'run-club-2026-abc, second-code-xyz';
+  process.env.MAX_USERS = '2';
+
+  const joinWith = async (invite: string | undefined, user: { sub: string; email: string }) => {
+    const c = await call(connectHandler, { method: 'GET', query: invite ? { invite } : {} });
+    const s = stateFrom(c.text);
+    nextGoogleUser = { ...user, verified: true };
+    return call(callbackHandler, { method: 'GET', query: { code: 'g-code', state: s } });
+  };
+
+  // No code and not on the allowlist: refused.
+  let joined = await joinWith(undefined, { sub: '333', email: 'runner1@example.com' });
+  assert.equal(joined.code, 403, 'no invite, not on the list');
+  assert.match(joined.text, /Not on the list/);
+
+  // A wrong code is worth nothing.
+  joined = await joinWith('not-the-code', { sub: '333', email: 'runner1@example.com' });
+  assert.equal(joined.code, 403, 'a wrong invite code admits nobody');
+
+  // A valid code admits them, and records it so the code isn't needed again.
+  joined = await joinWith('run-club-2026-abc', { sub: '333', email: 'runner1@example.com' });
+  assert.equal(joined.code, 200, 'valid invite admits a new person');
+  assert.match(joined.text, /Connect your Garmin/);
+  assert.ok(store.get('access:granted:runner1@example.com'), 'the grant is persisted');
+
+  joined = await joinWith(undefined, { sub: '333', email: 'runner1@example.com' });
+  assert.equal(joined.code, 200, 'returning without the code still works');
+
+  // The second listed code works too.
+  joined = await joinWith('second-code-xyz', { sub: '444', email: 'runner2@example.com' });
+  assert.equal(joined.code, 200, 'any configured code is accepted');
+
+  // Cap reached: a valid code no longer admits anyone, and says why.
+  joined = await joinWith('run-club-2026-abc', { sub: '555', email: 'runner3@example.com' });
+  assert.equal(joined.code, 403, 'the cap stops a leaked code enrolling the world');
+  assert.match(joined.text, /Server is full/);
+  assert.equal(store.get('access:granted:runner3@example.com'), undefined, 'no grant past the cap');
+
+  // Allowlisted people are unaffected by the cap.
+  joined = await joinWith(undefined, { sub: '111', email: 'you@example.com' });
+  assert.equal(joined.code, 200, 'ALLOWED_EMAILS still bypasses invites and the cap');
+
+  // With no codes configured, invites admit nobody.
+  delete process.env.INVITE_CODES;
+  joined = await joinWith('run-club-2026-abc', { sub: '666', email: 'runner4@example.com' });
+  assert.equal(joined.code, 403, 'unset INVITE_CODES means no invite works');
+
+  console.log('✓ oauth flow ok (multi-user + invites)');
 })();
