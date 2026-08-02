@@ -23,33 +23,58 @@ export class GarminAuthError extends Error {}
  */
 export class GarminSession {
   private profile?: Promise<{ displayName: string; profileId: number }>;
+  private connecting?: Promise<GarminConnect>;
 
   private constructor(
     readonly userId: string,
-    private readonly client: GarminConnect,
     /** access_token as loaded, used to detect a background refresh. */
-    private lastAccessToken: string | undefined
-  ) {}
+    private lastAccessToken: string | undefined,
+    client?: GarminConnect
+  ) {
+    if (client) this.connecting = Promise.resolve(client);
+  }
 
+  /**
+   * Resolves tokens on first use rather than up front.
+   *
+   * The HTTP transport wants this: a missing-token failure should surface as a
+   * readable tool error after the client has connected, not as an opaque
+   * handshake failure with nowhere to show the reason.
+   */
+  static forUser(userId: string): GarminSession {
+    return new GarminSession(userId, undefined);
+  }
+
+  /** Eager variant: fails at startup, which is what stdio wants. */
   static async create(userId: string = LOCAL_USER): Promise<GarminSession> {
-    const tokens = await loadTokens(userId);
-    if (!tokens) {
-      throw new GarminAuthError(
-        userId === LOCAL_USER
-          ? 'No Garmin tokens found. Run `npm run auth` to sign in.'
-          : `No Garmin tokens stored for this account. Connect Garmin before using these tools.`
-      );
-    }
-    const client = new GarminConnect({ username: '', password: '' });
-    client.loadToken(tokens.oauth1, tokens.oauth2);
-    return new GarminSession(userId, client, accessTokenOf(tokens));
+    const session = GarminSession.forUser(userId);
+    await session.getClient();
+    return session;
   }
 
   /** Builds a session from tokens already in hand, e.g. straight after login. */
   static fromTokens(userId: string, tokens: GarminTokens): GarminSession {
     const client = new GarminConnect({ username: '', password: '' });
     client.loadToken(tokens.oauth1, tokens.oauth2);
-    return new GarminSession(userId, client, accessTokenOf(tokens));
+    return new GarminSession(userId, accessTokenOf(tokens), client);
+  }
+
+  private getClient(): Promise<GarminConnect> {
+    this.connecting ??= (async () => {
+      const tokens = await loadTokens(this.userId);
+      if (!tokens) {
+        throw new GarminAuthError(
+          this.userId === LOCAL_USER
+            ? 'No Garmin tokens found. Run `npm run auth` to sign in.'
+            : 'No Garmin tokens stored for this account. Connect Garmin before using these tools.'
+        );
+      }
+      this.lastAccessToken = accessTokenOf(tokens);
+      const client = new GarminConnect({ username: '', password: '' });
+      client.loadToken(tokens.oauth1, tokens.oauth2);
+      return client;
+    })();
+    return this.connecting;
   }
 
   /**
@@ -57,9 +82,9 @@ export class GarminSession {
    * it expires. On a serverless instance that memory dies with the request, so
    * write the new token back or every cold start pays for a refresh.
    */
-  private async persistIfRefreshed(): Promise<void> {
+  private async persistIfRefreshed(client: GarminConnect): Promise<void> {
     try {
-      const current = this.client.exportToken();
+      const current = client.exportToken();
       const token = accessTokenOf(current);
       if (token && token !== this.lastAccessToken) {
         this.lastAccessToken = token;
@@ -71,39 +96,40 @@ export class GarminSession {
   }
 
   async api<T>(path: string, params?: Record<string, string>): Promise<T> {
-    const result = await this.client.client.get<T>(
-      `${GC_API}${path}`,
-      params ? { params } : undefined
-    );
-    await this.persistIfRefreshed();
+    const client = await this.getClient();
+    const result = await client.client.get<T>(`${GC_API}${path}`, params ? { params } : undefined);
+    await this.persistIfRefreshed(client);
     return result;
   }
 
   async apiPost<T>(path: string, body: unknown): Promise<T> {
-    const result = await this.client.client.post<T>(`${GC_API}${path}`, body);
-    await this.persistIfRefreshed();
+    const client = await this.getClient();
+    const result = await client.client.post<T>(`${GC_API}${path}`, body);
+    await this.persistIfRefreshed(client);
     return result;
   }
 
   async apiPut<T>(path: string, body: unknown): Promise<T> {
-    const result = await this.client.client.put<T>(`${GC_API}${path}`, body);
-    await this.persistIfRefreshed();
+    const client = await this.getClient();
+    const result = await client.client.put<T>(`${GC_API}${path}`, body);
+    await this.persistIfRefreshed(client);
     return result;
   }
 
   /** GET a binary payload (activity file exports) rather than JSON. */
   async apiDownload(path: string): Promise<Buffer> {
-    const data = await this.client.client.get<ArrayBuffer>(`${GC_API}${path}`, {
+    const client = await this.getClient();
+    const data = await client.client.get<ArrayBuffer>(`${GC_API}${path}`, {
       responseType: 'arraybuffer'
     });
-    await this.persistIfRefreshed();
+    await this.persistIfRefreshed(client);
     return Buffer.from(data);
   }
 
   /** Memoized per session, never across users. */
   private getProfile() {
-    this.profile ??= this.client
-      .getUserProfile()
+    this.profile ??= this.getClient()
+      .then((c) => c.getUserProfile())
       .then((p) => ({ displayName: p.displayName, profileId: p.profileId as number }));
     return this.profile;
   }
