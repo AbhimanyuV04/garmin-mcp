@@ -3,6 +3,14 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from 'n
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
+// Node's built-in .env loader (20.12+). MCP clients normally pass config via
+// their own `env` block, so a missing file is the common case, not an error.
+try {
+  process.loadEnvFile();
+} catch {
+  /* no .env present */
+}
+
 export type IGarminTokens = ReturnType<GarminConnect['exportToken']>;
 
 export const TOKEN_PATH =
@@ -69,6 +77,30 @@ export function getGarminClient(): Promise<GarminConnect> {
     }
   })();
   return cached;
+}
+
+const GC_API = 'https://connectapi.garmin.com';
+
+/**
+ * GET a Garmin Connect API path. The library wraps only sleep/HR/steps/weight,
+ * so everything else goes through here — it still rides the library's auth
+ * headers and oauth2 refresh interceptor.
+ */
+// ponytail: all tools use this one path rather than the library's typed getters
+// for the two it covers, so there is a single error surface to handle.
+export async function api<T>(path: string, params?: Record<string, string>): Promise<T> {
+  const client = await getGarminClient();
+  return client.client.get<T>(`${GC_API}${path}`, params ? { params } : undefined);
+}
+
+let displayName: Promise<string> | undefined;
+
+/** Several wellness endpoints are keyed by display name rather than user id. */
+export function getDisplayName(): Promise<string> {
+  displayName ??= getGarminClient()
+    .then((c) => c.getUserProfile())
+    .then((p) => p.displayName);
+  return displayName;
 }
 
 // ponytail: the library's axios interceptor refreshes oauth2 in-memory on expiry,
