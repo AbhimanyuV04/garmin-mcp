@@ -5,3 +5,6 @@ dist-api/
 .env.local
 *.tokens.json
 .vercel
+
+.vercel
+.env*

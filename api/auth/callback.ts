@@ -1,4 +1,4 @@
-import { grantAccess, hasAccess, loadTokens, maxUsers } from '../../src/db';
+import { grantAccess, hasAccess, loadTokens, maxUsers, usageStats } from '../../src/db';
 import { exchangeCode, isAllowed, openSignup, userIdFor, validInvite } from '../../src/google';
 import {
   DEPOSIT_TTL,
@@ -119,8 +119,13 @@ export default async function handler(req: Req, res: Res) {
     secret
   );
 
+  // Shown only to the people named in ALLOWED_EMAILS, who are the ones running
+  // this. Reuses the sign-in that already happened rather than adding another
+  // endpoint and another secret to guard it.
+  const stats = isAllowed(identity.email) ? await usageStats() : null;
+
   if (state.intent === 'connect') {
-    return html(res, 200, linkPage(identity.email, depositToken, hasGarmin, issuer, null));
+    return html(res, 200, linkPage(identity.email, depositToken, hasGarmin, issuer, null, stats));
   }
 
   if (!pending) {
@@ -134,7 +139,11 @@ export default async function handler(req: Req, res: Res) {
   // Signed in, but nothing to read yet. Rather than dead-ending, let them link
   // Garmin here and continue straight back to the client that is waiting.
   if (!hasGarmin) {
-    return html(res, 200, linkPage(identity.email, depositToken, false, issuer, state.requestId));
+    return html(
+      res,
+      200,
+      linkPage(identity.email, depositToken, false, issuer, state.requestId, stats)
+    );
   }
 
   const authCode = await issueCode({ ...pending, sub: userId });
@@ -154,12 +163,21 @@ const linkPage = (
   depositToken: string,
   hasGarmin: boolean,
   issuer: string,
-  requestId: string | null
+  requestId: string | null,
+  stats: { signups: number; linked: number } | null
 ) =>
   page(
     'Connect your Garmin',
     `Signed in as <strong>${esc(email)}</strong>.`,
     `${
+      stats
+        ? `<div class="card"><strong>This server</strong><br>
+             ${stats.linked} Garmin ${stats.linked === 1 ? 'account' : 'accounts'} linked
+             &middot; ${stats.signups} signed up via invite or open sign-up
+             &middot; cap ${maxUsers() === Infinity ? 'unlimited' : maxUsers()}</div>`
+        : ''
+    }
+    ${
       requestId
         ? `<div class="card">Claude is waiting for this. Link your Garmin account and
              you'll be sent straight back.</div>`

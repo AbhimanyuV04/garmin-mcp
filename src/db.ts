@@ -161,6 +161,26 @@ export async function grantAccess(email: string): Promise<boolean> {
 // To remove someone, delete their access:granted:<email> key in the Upstash
 // console. That is one click and needs no endpoint of its own.
 
+/**
+ * How many people are on this deployment.
+ *
+ * `signups` counts everyone admitted by an invite or open sign-up;
+ * `linked` counts those who went on to connect a Garmin account, which is the
+ * number that actually costs you anything — each one is a stored credential.
+ * ALLOWED_EMAILS people appear in `linked` but not `signups`, since they were
+ * never granted through the counter.
+ */
+export async function usageStats(): Promise<{ signups: number; linked: number }> {
+  const store = redis();
+  if (!store) return { signups: 0, linked: 0 };
+  // KEYS is O(n), which is fine at the scale a personal deployment reaches.
+  const [signups, linked] = await Promise.all([
+    accessCount(),
+    store.keys('garmin:tokens:*').then((k) => k.length)
+  ]);
+  return { signups, linked };
+}
+
 export async function deleteTokens(userId: string): Promise<void> {
   const store = redis();
   if (store) {

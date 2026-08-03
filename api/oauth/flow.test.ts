@@ -37,6 +37,10 @@ class FakeRedis {
   async expire() {
     return 1;
   }
+  async keys(pattern: string) {
+    const re = new RegExp('^' + pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$');
+    return [...store.keys()].filter((k) => re.test(k));
+  }
 }
 
 const resolved = require.resolve('@upstash/redis');
@@ -363,6 +367,19 @@ const stateFrom = (html: string) => {
 
   delete process.env.OPEN_SIGNUP;
   delete process.env.MAX_USERS;
+
+  // --- usage counts, visible only to the operator ---------------------------
+  const { usageStats } = require('../../src/db') as typeof import('../../src/db');
+  const counts = await usageStats();
+  assert.equal(counts.linked, 2, 'counts the Garmin accounts actually linked');
+  assert.ok(counts.signups >= 3, 'counts everyone admitted by invite or open sign-up');
+
+  // An operator sees the numbers; an ordinary user must not.
+  const asOwner = await joinWith(undefined, { sub: '111', email: 'you@example.com' });
+  assert.match(asOwner.text, /Garmin accounts? linked/, 'ALLOWED_EMAILS sees usage');
+
+  const asUser = await joinWith(undefined, { sub: '777', email: 'anyone@example.com' });
+  assert.doesNotMatch(asUser.text, /Garmin accounts? linked/, 'ordinary users see no counts');
 
   console.log('✓ oauth flow ok (multi-user + invites + open)');
 })();
