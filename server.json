@@ -1,0 +1,34 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.AbhimanyuV04/garmin-mcp",
+  "description": "Read Garmin Connect health and training data in Claude: sleep, heart rate, HRV, stress, body battery, training status and activities, plus structured workout creation.",
+  "repository": {
+    "url": "https://github.com/AbhimanyuV04/garmin-mcp",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "garmin-mcp",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "GARMIN_TOKENS_BASE64",
+          "description": "Garmin OAuth tokens from `npx garmin-mcp-auth`. Optional: without it the server reads ~/.garmin-mcp/tokens.json.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "GARMIN_TOKEN_PATH",
+          "description": "Override the token file location. Defaults to ~/.garmin-mcp/tokens.json.",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}

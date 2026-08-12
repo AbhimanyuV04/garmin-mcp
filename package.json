@@ -2,12 +2,40 @@
   "name": "garmin-mcp",
   "version": "0.1.0",
   "description": "MCP server for Garmin Connect health and activity data",
+  "mcpName": "io.github.AbhimanyuV04/garmin-mcp",
+  "license": "MIT",
+  "author": "Abhimanyu Vasudev",
+  "homepage": "https://github.com/AbhimanyuV04/garmin-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AbhimanyuV04/garmin-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/AbhimanyuV04/garmin-mcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "modelcontextprotocol",
+    "claude",
+    "garmin",
+    "garmin-connect",
+    "health",
+    "fitness",
+    "quantified-self"
+  ],
+  "files": [
+    "dist",
+    "!dist/**/*.test.js",
+    "!dist/**/*.test.d.ts"
+  ],
   "bin": {
     "garmin-mcp": "./dist/stdio.js",
     "garmin-mcp-auth": "./dist/auth-cli.js"
   },
   "scripts": {
     "build": "tsc && tsc -p tsconfig.api.json",
+    "prepublishOnly": "npm run build",
     "auth": "tsc && node dist/auth-cli.js",
     "test": "npm run build && node dist/db.test.js && node dist/tools/common.test.js && node dist/tools/training.test.js && node dist/oauth.test.js && node dist-api/api/deposit.test.js && node dist-api/api/oauth/flow.test.js && node dist-api/api/mcp.test.js"
   },
