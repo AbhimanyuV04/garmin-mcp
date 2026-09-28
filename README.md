@@ -137,6 +137,12 @@ Four prompts that exercise the whole suite end to end:
 `create_workout`, `update_activity` and `download_activity_file` are marked as
 writes, so Claude Desktop will ask before running them.
 
+Strength workouts check each exercise against a copy of Garmin's exercise
+catalog in `src/tools/exercise-catalog.ts`, because Garmin silently blanks a
+code it doesn't recognise. When Garmin adds exercises, save
+<https://connect.garmin.com/web-data/exercises/Exercises.json> from a browser and
+run `node scripts/refresh-exercise-catalog.mjs path/to/Exercises.json`.
+
 ### What your device actually reports
 
 Garmin answers `200` with empty data for metrics your watch doesn't record,

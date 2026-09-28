@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { buildWorkoutPayload, validateSteps } from './training';
+import { buildWorkoutPayload, checkExercise, validateSteps } from './training';
 
 // 10m warmup, 5x(400m hard Z4 / 90s recovery), 10m cooldown.
 const payload = buildWorkoutPayload('Intervals', 'running', [
@@ -109,6 +109,30 @@ assert.match(
 assert.match(
   validateSteps([{ type: 'interval', durationSeconds: 60, weightKg: 20 }], 'cycling')!,
   /only apply to strength_training/
+);
+
+// Garmin saves an unknown exercise code as a blank step, so the catalog check
+// is the only thing standing between a typo and an empty workout.
+assert.equal(checkExercise('BENCH_PRESS', 'BARBELL_BENCH_PRESS'), null);
+assert.equal(checkExercise('PLYO'), null, 'a category on its own is valid');
+assert.match(checkExercise('BENCHPRESS')!, /Unknown exercise category BENCHPRESS/);
+assert.match(
+  checkExercise('SQUAT', 'BARBELL_DEADLIFT')!,
+  /BARBELL_DEADLIFT is under DEADLIFT, not SQUAT/,
+  'a real name in the wrong category says where it lives'
+);
+assert.match(
+  checkExercise('BENCH_PRESS', 'BARBEL_BENCH_PRESS')!,
+  /no BARBEL_BENCH_PRESS under BENCH_PRESS\. Closest: BENCH_PRESS, /,
+  'a typo gets the nearest names in its category'
+);
+assert.match(
+  validateSteps(
+    [{ type: 'interval', reps: 5, exercise: { category: 'SQUAT', name: 'BACK_SQUAT_TYPO' } }],
+    'strength_training'
+  )!,
+  /no BACK_SQUAT_TYPO under SQUAT/,
+  'validateSteps runs the catalog check'
 );
 
 console.log('✓ workout builder ok');

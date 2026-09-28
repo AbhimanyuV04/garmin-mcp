@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GarminSession } from '../garmin';
+import { EXERCISE_CATALOG } from './exercise-catalog';
 import {
   compact,
   dateSchema,
@@ -71,15 +72,13 @@ const END_CONDITIONS = {
 } as const;
 
 // Garmin's exercise codes are SCREAMING_SNAKE (BENCH_PRESS, BARBELL_BENCH_PRESS);
-// accept "bench press" too, since that is how a person will say it. Garmin
-// does not reject an unknown code: it saves the step with the exercise blank.
-// The valid codes are its catalog at
-// https://connect.garmin.com/web-data/exercises/Exercises.json.
+// accept "bench press" too, since that is how a person will say it. Codes that
+// open with a digit carry a leading underscore (_3_WAY_CALF_RAISE).
 const exerciseCode = z
   .string()
   .trim()
   .min(1)
-  .transform((v) => v.toUpperCase().replace(/[\s-]+/g, '_'))
+  .transform((v) => v.toUpperCase().replace(/[\s-]+/g, '_').replace(/^(\d)/, '_$1'))
   .pipe(z.string().regex(/^[A-Z0-9_]+$/, 'Exercise codes are letters, digits and underscores.'));
 
 const exerciseSchema = z.object({
@@ -87,7 +86,7 @@ const exerciseSchema = z.object({
   name: exerciseCode
     .optional()
     .describe(
-      "Specific exercise within the category, e.g. BARBELL_BENCH_PRESS. Must be Garmin's exact code; an unknown one is saved blank. Omit if the category has none."
+      "Specific exercise within the category, e.g. BARBELL_BENCH_PRESS. Must be one of Garmin's codes for that category."
     )
 });
 
@@ -164,6 +163,34 @@ function buildExecutable(step: ExecutableStep, order: number) {
   };
 }
 
+const words = (code: string) => code.split('_').filter(Boolean);
+
+/**
+ * Garmin does not reject an unknown exercise code: it saves the step with the
+ * exercise blank. So check against its catalog here, and when a name is wrong
+ * point at where it does live or at the closest names in the category.
+ */
+export function checkExercise(category: string, name?: string): string | null {
+  const names = EXERCISE_CATALOG.get(category);
+  if (!names) {
+    return `Unknown exercise category ${category}. Garmin's categories are: ${[...EXERCISE_CATALOG.keys()].join(', ')}.`;
+  }
+  if (name === undefined || names.has(name)) return null;
+
+  const elsewhere = [...EXERCISE_CATALOG].filter(([, n]) => n.has(name)).map(([c]) => c);
+  if (elsewhere.length) {
+    return `${name} is under ${elsewhere.join(' or ')}, not ${category}.`;
+  }
+  const wanted = words(name);
+  const close = [...names]
+    .map((n) => ({ n, score: words(n).filter((w) => wanted.includes(w)).length }))
+    .filter((c) => c.score > 0)
+    .sort((a, b) => b.score - a.score || a.n.length - b.n.length)
+    .slice(0, 5)
+    .map((c) => c.n);
+  return `Garmin has no ${name} under ${category}.${close.length ? ` Closest: ${close.join(', ')}.` : ''}`;
+}
+
 /** Rejects step combinations Garmin's API accepts structurally but cannot run. */
 export function validateSteps(steps: WorkoutStep[], sport?: keyof typeof SPORT_TYPES): string | null {
   // ponytail: one level of repeat nesting, which is all Garmin's own editor
@@ -181,6 +208,10 @@ export function validateSteps(steps: WorkoutStep[], sport?: keyof typeof SPORT_T
     flat.some((s) => s.reps != null || s.exercise || s.weightKg != null)
   ) {
     return 'reps, exercise and weightKg only apply to strength_training workouts.';
+  }
+  for (const s of flat) {
+    const bad = s.exercise && checkExercise(s.exercise.category, s.exercise.name);
+    if (bad) return bad;
   }
   if (flat.some((s) => s.target && (s.target.min == null) !== (s.target.max == null))) {
     return 'A custom target range needs both min and max, or use zone instead.';
