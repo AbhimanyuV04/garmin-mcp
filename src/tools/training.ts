@@ -71,7 +71,10 @@ const END_CONDITIONS = {
 } as const;
 
 // Garmin's exercise codes are SCREAMING_SNAKE (BENCH_PRESS, BARBELL_BENCH_PRESS);
-// accept "bench press" too, since that is how a person will say it.
+// accept "bench press" too, since that is how a person will say it. Garmin
+// does not reject an unknown code: it saves the step with the exercise blank.
+// The valid codes are its catalog at
+// https://connect.garmin.com/web-data/exercises/Exercises.json.
 const exerciseCode = z
   .string()
   .trim()
@@ -83,7 +86,9 @@ const exerciseSchema = z.object({
   category: exerciseCode.describe('Garmin exercise category, e.g. BENCH_PRESS, SQUAT, DEADLIFT.'),
   name: exerciseCode
     .optional()
-    .describe('Specific exercise within the category, e.g. BARBELL_BENCH_PRESS.')
+    .describe(
+      "Specific exercise within the category, e.g. BARBELL_BENCH_PRESS. Must be Garmin's exact code; an unknown one is saved blank. Omit if the category has none."
+    )
 });
 
 const executableStep = z.object({
