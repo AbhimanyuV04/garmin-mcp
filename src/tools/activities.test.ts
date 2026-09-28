@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { strengthSummary, summarizeExerciseSets } from './activities';
+import { strengthSummary, subTypeQuery, summarizeExerciseSets } from './activities';
 
 // Shape of /activity-service/activity/{id}/exerciseSets: rest periods are
 // their own sets, weights are grams, and Garmin ranks its exercise guesses.
@@ -62,5 +62,19 @@ assert.deepEqual(listed.exercises, [
   { exercise: 'PLANK', category: 'PLANK', sets: 4, reps: 0 }
 ]);
 assert.deepEqual(strengthSummary({}), {});
+
+// Shape of /activity-service/activity/activityTypes (ids illustrative).
+const types = [
+  { typeId: 1, typeKey: 'running', parentTypeId: 17 },
+  { typeId: 17, typeKey: 'all', parentTypeId: null },
+  { typeId: 29, typeKey: 'fitness_equipment', parentTypeId: 17 },
+  { typeId: 13, typeKey: 'strength_training', parentTypeId: 29 }
+];
+assert.deepEqual(subTypeQuery(types, 'strength_training'), {
+  activityType: 'fitness_equipment',
+  activitySubType: 'strength_training'
+});
+assert.equal(subTypeQuery(types, 'yoga'), null, 'unknown key: no retry');
+assert.equal(subTypeQuery(null, 'strength_training'), null);
 
 console.log('✓ strength sets ok');

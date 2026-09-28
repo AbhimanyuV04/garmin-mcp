@@ -104,6 +104,22 @@ export function summarizeExerciseSets(raw: any) {
   });
 }
 
+/**
+ * Garmin's search takes a top-level type in activityType and rejects a
+ * sub-type there ("Activity type cannot be an activity sub type"). Sub-types
+ * such as strength_training go in activitySubType under their parent type,
+ * which is how Garmin's own site filters them.
+ */
+export function subTypeQuery(types: unknown, key: string): Record<string, string> | null {
+  const list = Array.isArray(types) ? types : [];
+  const self = list.find((t: any) => t?.typeKey === key);
+  const parent = list.find((t: any) => t?.typeId === self?.parentTypeId);
+  return parent?.typeKey ? { activityType: parent.typeKey, activitySubType: key } : null;
+}
+
+const isSubTypeRejection = (err: unknown) =>
+  /activity sub type/i.test(err instanceof Error ? err.message : String(err));
+
 const DOWNLOADS = {
   // Garmin serves the original FIT wrapped in a zip; the others are plain XML.
   fit: { path: '/download-service/files/activity', ext: 'zip' },
@@ -125,11 +141,26 @@ export function registerActivityTools(server: McpServer, g: GarminSession): void
         .describe('Garmin type key filter, e.g. running, cycling, swimming, strength_training.')
     },
     async ({ limit, start, activityType }) => {
-      const activities = await g.api<any[]>(`/activitylist-service/activities/search/activities`, {
-        start: String(start ?? 0),
-        limit: String(limit ?? 10),
-        ...(activityType ? { activityType } : {})
-      });
+      const search = (filter: Record<string, string>) =>
+        g.api<any[]>(`/activitylist-service/activities/search/activities`, {
+          start: String(start ?? 0),
+          limit: String(limit ?? 10),
+          ...filter
+        });
+
+      let activities: any[];
+      try {
+        activities = await search(activityType ? { activityType } : {});
+      } catch (err) {
+        if (!activityType || !isSubTypeRejection(err)) throw err;
+        const types = await g.api<any[]>('/activity-service/activity/activityTypes');
+        const query = subTypeQuery(types, activityType);
+        if (!query) throw err;
+        // The parent search can include siblings; keep only what was asked for.
+        activities = (await search(query))?.filter(
+          (a: any) => a.activityType?.typeKey === activityType
+        );
+      }
 
       if (!activities?.length) {
         return problem(
