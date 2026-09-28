@@ -37,6 +37,89 @@ function speedFields(sport: string | undefined, metersPerSecond: number | null |
     : { avg_speed_kmh: kmh(metersPerSecond) };
 }
 
+const STRENGTH_SPORT = 'strength_training';
+
+// Garmin stores strength weights in grams, on sets and on summed volume alike.
+const kg = (grams: unknown) =>
+  typeof grams === 'number' && grams > 0 ? round(grams / 1000, 1) : undefined;
+
+/** Per-exercise totals the activity list already carries for strength sessions. */
+export function strengthSummary(a: any) {
+  const exercises = Array.isArray(a?.summarizedExerciseSets)
+    ? a.summarizedExerciseSets.map((e: any) =>
+        compact({
+          exercise: e.subCategory ?? e.category,
+          category: e.category,
+          sets: e.sets,
+          reps: e.reps,
+          volume_kg: kg(e.volume)
+        })
+      )
+    : [];
+  return compact({
+    total_sets: a?.activeSets ?? a?.totalSets,
+    total_reps: a?.totalReps,
+    exercises: exercises.length ? exercises : undefined
+  });
+}
+
+/**
+ * Flattens Garmin's exerciseSets into the sets a lifter logged. Rest periods
+ * arrive as their own sets; fold each into the set before it as rest_after so
+ * the list reads like a training log rather than alternating rows.
+ */
+export function summarizeExerciseSets(raw: any) {
+  const sets: Record<string, unknown>[] = [];
+  let reps = 0;
+  let volume = 0;
+  for (const s of Array.isArray(raw?.exerciseSets) ? raw.exerciseSets : []) {
+    if (s?.setType !== 'ACTIVE') {
+      const last = sets[sets.length - 1];
+      if (last && typeof s?.duration === 'number') last.rest_after = hms(s.duration);
+      continue;
+    }
+    // Garmin guesses the exercise and ranks candidates; the first-ranked wins.
+    const guess = [...(s.exercises ?? [])].sort(
+      (x: any, y: any) => (y?.probability ?? 0) - (x?.probability ?? 0)
+    )[0];
+    const count = typeof s.repetitionCount === 'number' ? s.repetitionCount : undefined;
+    if (count) reps += count;
+    if (count && typeof s.weight === 'number' && s.weight > 0) volume += count * s.weight;
+    sets.push(
+      compact({
+        set: sets.length + 1,
+        exercise: guess?.name ?? guess?.category,
+        category: guess?.category,
+        reps: count,
+        weight_kg: kg(s.weight),
+        duration: hms(s.duration)
+      })
+    );
+  }
+  return compact({
+    total_sets: sets.length || undefined,
+    total_reps: reps || undefined,
+    total_volume_kg: kg(volume),
+    sets: sets.length ? sets : undefined
+  });
+}
+
+/**
+ * Garmin's search takes a top-level type in activityType and rejects a
+ * sub-type there ("Activity type cannot be an activity sub type"). Sub-types
+ * such as strength_training go in activitySubType under their parent type,
+ * which is how Garmin's own site filters them.
+ */
+export function subTypeQuery(types: unknown, key: string): Record<string, string> | null {
+  const list = Array.isArray(types) ? types : [];
+  const self = list.find((t: any) => t?.typeKey === key);
+  const parent = list.find((t: any) => t?.typeId === self?.parentTypeId);
+  return parent?.typeKey ? { activityType: parent.typeKey, activitySubType: key } : null;
+}
+
+const isSubTypeRejection = (err: unknown) =>
+  /activity sub type/i.test(err instanceof Error ? err.message : String(err));
+
 const DOWNLOADS = {
   // Garmin serves the original FIT wrapped in a zip; the others are plain XML.
   fit: { path: '/download-service/files/activity', ext: 'zip' },
@@ -48,7 +131,7 @@ export function registerActivityTools(server: McpServer, g: GarminSession): void
   defineTool(
     server,
     'list_activities',
-    'Recent activities with id, title, sport, start time, distance, duration, average pace or speed, average heart rate and elevation gain.',
+    'Recent activities with id, title, sport, start time, distance, duration, average pace or speed, average heart rate and elevation gain. Strength sessions also carry sets, reps and per-exercise volume.',
     {
       limit: z.number().int().min(1).max(50).optional().describe('How many. Default 10, max 50.'),
       start: z.number().int().min(0).optional().describe('Offset for paging. Default 0.'),
@@ -58,11 +141,26 @@ export function registerActivityTools(server: McpServer, g: GarminSession): void
         .describe('Garmin type key filter, e.g. running, cycling, swimming, strength_training.')
     },
     async ({ limit, start, activityType }) => {
-      const activities = await g.api<any[]>(`/activitylist-service/activities/search/activities`, {
-        start: String(start ?? 0),
-        limit: String(limit ?? 10),
-        ...(activityType ? { activityType } : {})
-      });
+      const search = (filter: Record<string, string>) =>
+        g.api<any[]>(`/activitylist-service/activities/search/activities`, {
+          start: String(start ?? 0),
+          limit: String(limit ?? 10),
+          ...filter
+        });
+
+      let activities: any[];
+      try {
+        activities = await search(activityType ? { activityType } : {});
+      } catch (err) {
+        if (!activityType || !isSubTypeRejection(err)) throw err;
+        const types = await g.api<any[]>('/activity-service/activity/activityTypes');
+        const query = subTypeQuery(types, activityType);
+        if (!query) throw err;
+        // The parent search can include siblings; keep only what was asked for.
+        activities = (await search(query))?.filter(
+          (a: any) => a.activityType?.typeKey === activityType
+        );
+      }
 
       if (!activities?.length) {
         return problem(
@@ -86,7 +184,8 @@ export function registerActivityTools(server: McpServer, g: GarminSession): void
             avg_heart_rate_bpm: a.averageHR,
             max_heart_rate_bpm: a.maxHR,
             elevation_gain_m: a.elevationGain != null ? round(a.elevationGain) : undefined,
-            calories: a.calories
+            calories: a.calories,
+            ...(sport === STRENGTH_SPORT ? strengthSummary(a) : {})
           });
         })
       );
@@ -96,7 +195,7 @@ export function registerActivityTools(server: McpServer, g: GarminSession): void
   defineTool(
     server,
     'get_activity_details',
-    'Full breakdown for one activity: lap splits, time in heart rate and power zones, elevation profile, cadence, normalized power, and aerobic/anaerobic training effect.',
+    'Full breakdown for one activity: lap splits, time in heart rate and power zones, elevation profile, cadence, normalized power, and aerobic/anaerobic training effect. Strength sessions list every set with exercise, reps, weight and rest instead of laps.',
     { activityId },
     async ({ activityId: id }) => {
       // Deliberately not calling /details — that endpoint returns the full
@@ -113,6 +212,13 @@ export function registerActivityTools(server: McpServer, g: GarminSession): void
 
       const s = activity.summaryDTO ?? {};
       const sport = activity.activityTypeDTO?.typeKey;
+      // Only strength sessions have sets, so runs and rides skip the extra call.
+      const strength =
+        sport === STRENGTH_SPORT
+          ? summarizeExerciseSets(
+              await g.api<any>(`${ACTIVITY_PATH}/${id}/exerciseSets`).catch(() => null)
+            )
+          : ({} as ReturnType<typeof summarizeExerciseSets>);
 
       const zoneList = (zones: unknown) =>
         Array.isArray(zones) && zones.length
@@ -167,7 +273,9 @@ export function registerActivityTools(server: McpServer, g: GarminSession): void
           training_effect_label: s.trainingEffectLabel,
           hr_time_in_zones: zoneList(hrZones),
           power_time_in_zones: zoneList(powerZones),
-          laps: laps.length ? laps : undefined
+          ...strength,
+          // A strength session's laps are its sets again, minus the detail.
+          laps: laps.length && !strength.sets ? laps : undefined
         })
       );
     }
