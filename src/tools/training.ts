@@ -62,10 +62,41 @@ const targetSchema = z.object({
   max: z.number().optional().describe('Custom range high end. Requires min.')
 });
 
+// Garmin's end-condition ids. A step ends on the first of these it is given.
+const END_CONDITIONS = {
+  'lap.button': 1,
+  time: 2,
+  distance: 3,
+  reps: 10
+} as const;
+
+// Garmin's exercise codes are SCREAMING_SNAKE (BENCH_PRESS, BARBELL_BENCH_PRESS);
+// accept "bench press" too, since that is how a person will say it.
+const exerciseCode = z
+  .string()
+  .trim()
+  .min(1)
+  .transform((v) => v.toUpperCase().replace(/[\s-]+/g, '_'))
+  .pipe(z.string().regex(/^[A-Z0-9_]+$/, 'Exercise codes are letters, digits and underscores.'));
+
+const exerciseSchema = z.object({
+  category: exerciseCode.describe('Garmin exercise category, e.g. BENCH_PRESS, SQUAT, DEADLIFT.'),
+  name: exerciseCode
+    .optional()
+    .describe('Specific exercise within the category, e.g. BARBELL_BENCH_PRESS.')
+});
+
 const executableStep = z.object({
   type: z.enum(['warmup', 'interval', 'recovery', 'cooldown', 'rest']),
   durationSeconds: z.number().int().positive().optional(),
   distanceMeters: z.number().positive().optional(),
+  reps: z.number().int().positive().optional().describe('Strength only: end the step after this many reps.'),
+  lapButton: z
+    .boolean()
+    .optional()
+    .describe('End the step when the lap button is pressed, e.g. rest until ready.'),
+  exercise: exerciseSchema.optional().describe('Strength only: the exercise for this set.'),
+  weightKg: z.number().positive().optional().describe('Strength only: planned load in kg.'),
   target: targetSchema.optional(),
   description: z.string().optional()
 });
@@ -94,29 +125,57 @@ function buildTarget(target?: z.infer<typeof targetSchema>) {
   return { ...base, zoneNumber: target?.zone ?? 2 };
 }
 
+/** A step given several endings uses the first of distance, reps, time, lap button. */
+function endConditionOf(step: ExecutableStep) {
+  const [key, value]: [keyof typeof END_CONDITIONS, number | undefined] =
+    step.distanceMeters != null
+      ? ['distance', step.distanceMeters]
+      : step.reps != null
+        ? ['reps', step.reps]
+        : step.durationSeconds != null || !step.lapButton
+          ? ['time', step.durationSeconds]
+          : ['lap.button', undefined];
+  return {
+    endCondition: { conditionTypeId: END_CONDITIONS[key], conditionTypeKey: key },
+    endConditionValue: value
+  };
+}
+
 function buildExecutable(step: ExecutableStep, order: number) {
-  const byDistance = step.distanceMeters != null;
   return {
     type: 'ExecutableStepDTO',
     stepOrder: order,
     stepType: { stepTypeId: STEP_TYPES[step.type], stepTypeKey: step.type },
     description: step.description,
-    endCondition: byDistance
-      ? { conditionTypeId: 3, conditionTypeKey: 'distance' }
-      : { conditionTypeId: 2, conditionTypeKey: 'time' },
-    endConditionValue: byDistance ? step.distanceMeters : step.durationSeconds,
-    ...buildTarget(step.target)
+    ...endConditionOf(step),
+    ...buildTarget(step.target),
+    ...(step.exercise
+      ? { category: step.exercise.category, exerciseName: step.exercise.name }
+      : {}),
+    // Garmin keeps the planned load in the unit named here; kg keeps it exact.
+    ...(step.weightKg != null
+      ? { weightValue: step.weightKg, weightUnit: { unitId: 8, unitKey: 'kilogram', factor: 1000 } }
+      : {})
   };
 }
 
 /** Rejects step combinations Garmin's API accepts structurally but cannot run. */
-export function validateSteps(steps: WorkoutStep[]): string | null {
+export function validateSteps(steps: WorkoutStep[], sport?: keyof typeof SPORT_TYPES): string | null {
   // ponytail: one level of repeat nesting, which is all Garmin's own editor
   // exposes. Recurse buildWorkoutPayload if a workout ever needs deeper nesting.
   const flat = steps.flatMap((s) => (isRepeat(s) ? s.steps : [s]));
-  const missing = flat.find((s) => s.durationSeconds == null && s.distanceMeters == null);
+  const missing = flat.find(
+    (s) => s.durationSeconds == null && s.distanceMeters == null && s.reps == null && !s.lapButton
+  );
   if (missing) {
-    return `Step "${missing.type}" needs either durationSeconds or distanceMeters — Garmin cannot end a step without one.`;
+    return `Step "${missing.type}" needs durationSeconds, distanceMeters, reps or lapButton — Garmin cannot end a step without one.`;
+  }
+  if (
+    sport !== undefined &&
+    sport !== 'strength_training' &&
+    flat.some((s) => s.reps != null || s.exercise || s.weightKg != null)
+  ) {
+    return 'reps, exercise and weightKg only apply to strength_training workouts.';
   }
   if (flat.some((s) => s.target && (s.target.min == null) !== (s.target.max == null))) {
     return 'A custom target range needs both min and max, or use zone instead.';
@@ -414,7 +473,7 @@ export function registerTrainingTools(server: McpServer, g: GarminSession): void
   defineTool(
     server,
     'create_workout',
-    'Create a structured workout in Garmin Connect so it syncs to the watch. Steps run in order; wrap repeated blocks in a repeat group. Writes to the Garmin account.',
+    'Create a structured workout in Garmin Connect so it syncs to the watch. Steps run in order; wrap repeated blocks in a repeat group. Strength workouts give each set an exercise, reps and optional weightKg, with rest steps ending on time or lapButton. Writes to the Garmin account.',
     {
       title: z.string().min(1).max(80),
       sport: z.enum(['running', 'cycling', 'walking', 'strength_training']),
@@ -422,11 +481,11 @@ export function registerTrainingTools(server: McpServer, g: GarminSession): void
         .array(z.union([repeatGroup, executableStep]))
         .min(1)
         .describe(
-          'Ordered steps. Each needs durationSeconds or distanceMeters. Use {repeat, steps} for intervals.'
+          'Ordered steps. Each needs durationSeconds, distanceMeters, reps or lapButton. Use {repeat, steps} for intervals or sets.'
         )
     },
     async ({ title, sport, steps }) => {
-      const invalid = validateSteps(steps);
+      const invalid = validateSteps(steps, sport);
       if (invalid) return problem(invalid);
 
       const payload = buildWorkoutPayload(title, sport, steps);

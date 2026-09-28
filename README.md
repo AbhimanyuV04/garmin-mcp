@@ -102,7 +102,7 @@ Restart Claude Desktop after editing. The tools appear under the plug icon.
 
 ## Try it
 
-Three prompts that exercise the whole suite end to end:
+Four prompts that exercise the whole suite end to end:
 
 **Health**
 > Pull my sleep and resting heart rate for the last five days, along with daily
@@ -117,6 +117,11 @@ Three prompts that exercise the whole suite end to end:
 **Activity**
 > Find my most recent run, break down the lap splits and time in each heart rate
 > zone, and tell me whether I paced it evenly or went out too fast.
+
+**Strength**
+> Show every set from my last gym session with reps and weight, then build me a
+> workout for next time: 3x8 barbell bench press at 2.5 kg more than I lifted,
+> resting until I press lap between sets.
 
 ## Tools
 
