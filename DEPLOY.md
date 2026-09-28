@@ -1,26 +1,27 @@
 # Deploying the remote MCP server
 
-Turns this into a hosted connector you can add to Claude Web: one URL, an OAuth
-login, and your Garmin tools appear.
+Turns this into a hosted connector for Claude web and mobile: one URL, a Google
+sign-in, and your Garmin tools appear. Several people can share one deployment,
+each linking their own Garmin account.
 
-Deploying puts your health data behind a public URL. `ADMIN_PASSWORD` is the
-only thing in front of it — use something long and random, not a password you
-have used elsewhere. If you only ever use Claude Desktop, the local stdio setup
-in [README.md](README.md) is simpler and exposes nothing.
+Deploying puts health data behind a public URL, and you become the operator
+holding other people's Garmin tokens. If you only ever use Claude Desktop, the
+local stdio setup in [README.md](README.md) is simpler and exposes nothing.
 
 ## Routes
 
 | Public path | Handler | Purpose |
 | --- | --- | --- |
 | `/mcp` | `api/mcp.ts` | The MCP endpoint. This is the connector URL. |
-| `/authorize` | `api/oauth/authorize.ts` | Login page shown by Claude |
-| `/login` | `api/oauth/login.ts` | Password check, issues the auth code |
+| `/` and `/connect` | `api/connect.ts` | Sign in, link Garmin, get the connector URL |
+| `/authorize` | `api/oauth/authorize.ts` | Authorization request from Claude |
 | `/token` | `api/oauth/token.ts` | Code and refresh grants |
 | `/register` | `api/oauth/register.ts` | Dynamic client registration |
+| `/auth/callback` | `api/auth/callback.ts` | Google returns here; verifies identity |
+| `/auth/resume` | `api/auth/resume.ts` | Continues back to a waiting MCP client |
+| `/api/deposit` | `api/deposit.ts` | Stores Garmin tokens in Redis |
 | `/.well-known/oauth-authorization-server` | `api/oauth/metadata.ts` | Endpoint discovery |
 | `/.well-known/oauth-protected-resource` | `api/oauth/resource.ts` | Points Claude at the auth server |
-| `/api/deposit` | `api/deposit.ts` | Stores Garmin tokens in Redis |
-| `/` | `public/index.html` | Deposit form |
 
 All wired in `vercel.json`. Nothing to configure by hand.
 
@@ -29,35 +30,64 @@ All wired in `vercel.json`. Nothing to configure by hand.
 Any region. Copy the **REST** URL and token from the console — the REST pair,
 not the `redis://` connection string.
 
-## 2. Generate secrets
+## 2. Create a Google OAuth client
 
-```bash
-node -e "console.log('JWT_SECRET=' + require('crypto').randomBytes(32).toString('base64url')); console.log('ADMIN_PASSWORD=' + require('crypto').randomBytes(24).toString('base64url')); console.log('AUTH_GATE_SECRET=' + require('crypto').randomBytes(24).toString('base64url'))"
+At [console.cloud.google.com](https://console.cloud.google.com) → Credentials →
+Create Credentials → OAuth client ID → **Web application**. Add this authorized
+redirect URI:
+
+```
+https://YOUR-APP.vercel.app/auth/callback
 ```
 
-## 3. Set environment variables
+Copy the client ID and secret. This server never sees or stores a password;
+identity comes from Google, and a person's subject claim keys their Garmin
+tokens.
 
-All four are required. Each one is checked at runtime, and a missing or
-too-short value disables the endpoint that needs it rather than silently
-weakening it.
+## 3. Generate the signing secret
+
+```bash
+node -e "console.log('JWT_SECRET=' + require('crypto').randomBytes(32).toString('base64url'))"
+```
+
+## 4. Set environment variables
+
+Each is checked at runtime, and a missing or too-short value disables the
+endpoint that needs it rather than silently weakening it.
 
 | Variable | Required | Notes |
 | --- | --- | --- |
 | `UPSTASH_REDIS_REST_URL` | yes | REST URL from Upstash |
 | `UPSTASH_REDIS_REST_TOKEN` | yes | REST token from Upstash |
 | `JWT_SECRET` | yes, 16+ | Signs MCP access tokens. Changing it revokes every session. |
-| `ADMIN_PASSWORD` | yes, 16+ | The OAuth login password. Rate limited to 8 tries per 15 min per IP. |
-| `AUTH_GATE_SECRET` | yes, 16+ | Guards `/api/deposit`. Without it that endpoint refuses every request. |
+| `GOOGLE_CLIENT_ID` | yes | From step 2 |
+| `GOOGLE_CLIENT_SECRET` | yes | From step 2 |
+| `ALLOWED_EMAILS` | see below | Comma-separated. Empty blocks everyone rather than allowing everyone. |
+| `INVITE_CODES` | no | Comma-separated, 8+ chars each. Lets a group self-serve. |
+| `MAX_USERS` | no | Caps invite redemptions. Defaults to 25; `unlimited` removes the ceiling. |
+| `OPEN_SIGNUP` | no | `true` lets any verified Google account join. Off unless set. |
+
+Access is closed by default. Pick one:
+
+- **Just you, or a handful of people** — list the addresses in `ALLOWED_EMAILS`.
+- **A group** — set `INVITE_CODES` and share
+  `https://YOUR-APP.vercel.app/connect?invite=CODE`. Redemption is recorded per
+  address, so the code is needed only once, and `MAX_USERS` caps how far a
+  forwarded code can travel.
+- **Public** — set `OPEN_SIGNUP=true`. You will hold 30-day Garmin tokens for
+  strangers, including GPS traces of every run. `/connect` states plainly that
+  the server is run by an individual, what linking stores, and how to remove it.
 
 ```bash
 npx vercel env add JWT_SECRET production
-npx vercel env add ADMIN_PASSWORD production
-npx vercel env add AUTH_GATE_SECRET production
+npx vercel env add GOOGLE_CLIENT_ID production
+npx vercel env add GOOGLE_CLIENT_SECRET production
+npx vercel env add ALLOWED_EMAILS production
 npx vercel env add UPSTASH_REDIS_REST_URL production
 npx vercel env add UPSTASH_REDIS_REST_TOKEN production
 ```
 
-## 4. Deploy
+## 5. Deploy
 
 ```bash
 npx vercel deploy --prod
@@ -72,31 +102,20 @@ curl https://YOUR-APP.vercel.app/.well-known/oauth-authorization-server
 You should see JSON whose `issuer` matches your domain. If you get HTML, the
 rewrites did not apply — redeploy after confirming `vercel.json` is committed.
 
-## 5. Deposit your Garmin tokens
+## 6. Link your Garmin account
 
-Nothing works until Garmin tokens exist in Redis under the `owner` key. The
-OAuth login deliberately refuses with "Garmin not connected" until they do,
-rather than letting you connect to a server where every tool fails.
+Open `https://YOUR-APP.vercel.app/connect`, continue with Google, then enter
+your Garmin email and password on the linking form. The password is used once to
+reach Garmin and never stored; only the resulting OAuth tokens are kept, keyed to
+your Google identity.
 
-**Option A — the web form.** Open `https://YOUR-APP.vercel.app/`, enter your
-`AUTH_GATE_SECRET` as the access key, then your Garmin email and password. On
-success the response includes `"deposited": true`.
-
-**Option B — from the CLI**, if you would rather your password not touch the
-browser:
-
-```bash
-curl -X POST https://YOUR-APP.vercel.app/api/deposit -H "content-type: application/json" -H "x-auth-gate: YOUR_AUTH_GATE_SECRET" -d '{"email":"you@example.com","password":"YOUR_GARMIN_PASSWORD"}'
-```
-
-Either way the password is used once to reach Garmin and never stored. Tokens
-expire after about 30 days; repeat this step when tools start reporting that
-Garmin rejected the session.
+Tokens expire after about 30 days. Repeat this step when tools start reporting
+that Garmin rejected the session.
 
 > Two-factor Garmin accounts are not supported — the underlying library cannot
 > answer an MFA challenge.
 
-## 6. Add the connector in Claude
+## 7. Add the connector in Claude
 
 Settings → Connectors → **Add custom connector**, then paste:
 
@@ -104,11 +123,13 @@ Settings → Connectors → **Add custom connector**, then paste:
 https://YOUR-APP.vercel.app/mcp
 ```
 
-Claude registers itself, discovers the OAuth endpoints, and opens the login
-page. Enter your `ADMIN_PASSWORD` and approve. The 15 tools appear once the
-flow completes.
+Claude registers itself, discovers the OAuth endpoints, and opens the sign-in
+page. The 15 tools appear once the flow completes.
 
-## 7. Test it
+You can also add the connector before linking Garmin — the callback offers the
+linking form in place and then continues back to the waiting client.
+
+## 8. Test it
 
 > Pull my Garmin daily summary and sleep for the last three days, then my
 > current training status and VO2 max. Find my most recent run and break down
@@ -122,14 +143,18 @@ answer tells you the whole connector works.
 
 - **Access tokens last 1 hour**, refresh tokens 30 days and rotate on every use.
   A rotated token cannot be replayed.
+- **Usage counts** — how many accounts are linked and how many people signed up
+  are shown on the callback page, but only to addresses in `ALLOWED_EMAILS`.
 - **Revoke everything** by changing `JWT_SECRET` and redeploying. To disconnect
-  Garmin specifically, delete the `garmin:tokens:owner` key in Upstash.
-- **Single user.** Every login maps to `owner`. Adding real multi-user means
-  replacing the password check with an identity provider and keying tokens by
-  its subject claim; the storage layer already takes a user id throughout.
+  one person's Garmin, delete their `garmin:tokens:google_<sub>` key in Upstash;
+  they can also remove their own with `DELETE /api/deposit`.
 - **No scope enforcement yet.** A valid token can call the three write tools
   (`create_workout`, `update_activity`, `download_activity_file`) as well as the
   reads. The scopes are advertised but not checked.
-- **Rate limiting covers the login only.** It is Redis-backed because serverless
-  instances share no memory. `/api/deposit` is protected by the gate secret
-  rather than a counter.
+- **Rate limiting covers sign-in only.** It is Redis-backed because serverless
+  instances share no memory. `/api/deposit` requires a deposit token whose
+  audience differs from an MCP access token, so a token that reads Garmin data
+  cannot overwrite the stored login.
+- **`public/robots.txt` disallows all crawlers.** The sign-in and linking pages
+  should not be indexed. This also means your deployment contributes nothing to
+  discovery — the repo is the funnel.

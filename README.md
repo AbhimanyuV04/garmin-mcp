@@ -1,104 +1,54 @@
 # garmin-mcp
 
-An MCP server that gives Claude read access to your Garmin Connect data —
-sleep, heart rate, stress, training load, HRV, activities — plus a small number
-of writes (create a structured workout, edit an activity, export a file).
+[![npm](https://img.shields.io/npm/v/garmin-mcp)](https://www.npmjs.com/package/garmin-mcp)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-TypeScript, plain `node`. No `uvx`, no Python, no Docker.
+Ask Claude about your Garmin data. Sleep, heart rate, stress, training load,
+HRV and activities, plus a few writes — create a structured workout, edit an
+activity, export a `.fit` file.
 
-## Setup
+TypeScript, plain `node`. No Python, no `uvx`, no Docker.
+
+```
+> Find my most recent run, break down the lap splits and time in each heart
+> rate zone, and tell me whether I paced it evenly or went out too fast.
+```
+
+## Quick start
 
 ```bash
-npm install
-npm run auth     # one-time Garmin login; caches tokens
-npm run build
+npx garmin-mcp-auth
 ```
 
-`npm run auth` prompts for your Garmin email and password, exchanges them for
-OAuth tokens, and writes `~/.garmin-mcp/tokens.json` with `0600` permissions.
-Your password is never stored. The tokens last roughly 30 days, after which you
-re-run the command.
+Prompts for your Garmin email and password, exchanges them for OAuth tokens,
+and writes `~/.garmin-mcp/tokens.json` with `0600` permissions. Your password is
+never stored. Tokens last about 30 days, then you re-run this.
 
-> Accounts with two-factor authentication are not supported — the underlying
-> library cannot answer an MFA challenge.
+Then add the server to `claude_desktop_config.json`:
 
-## Connecting Claude Desktop
+```json
+{
+  "mcpServers": {
+    "garmin": {
+      "command": "npx",
+      "args": ["-y", "garmin-mcp"]
+    }
+  }
+}
+```
 
-Find `claude_desktop_config.json`:
+Restart Claude Desktop. The tools appear under the plug icon.
 
-| OS | Path |
+| OS | Config path |
 | --- | --- |
-| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
 | macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
 
-You can also reach it from Claude Desktop: **Settings → Developer → Edit
-Config**. Create the file if it doesn't exist.
+Also reachable from **Settings → Developer → Edit Config**. Create the file if
+it doesn't exist.
 
-### Option A — cached token file (recommended)
-
-Nothing secret goes in the config; the server reads `~/.garmin-mcp/tokens.json`.
-
-```json
-{
-  "mcpServers": {
-    "garmin": {
-      "command": "node",
-      "args": ["C:\\Users\\abhim\\Documents\\garmin-mcp\\dist\\stdio.js"]
-    }
-  }
-}
-```
-
-On macOS the path is plain, with no escaping:
-
-```json
-{
-  "mcpServers": {
-    "garmin": {
-      "command": "node",
-      "args": ["/Users/you/garmin-mcp/dist/stdio.js"]
-    }
-  }
-}
-```
-
-### Option B — token string in the environment
-
-For machines where you'd rather not leave a token file, or where the server runs
-somewhere without your home directory. Use the `GARMIN_TOKENS_BASE64` value
-printed by `npm run auth`.
-
-```json
-{
-  "mcpServers": {
-    "garmin": {
-      "command": "node",
-      "args": ["C:\\Users\\abhim\\Documents\\garmin-mcp\\dist\\stdio.js"],
-      "env": {
-        "GARMIN_TOKENS_BASE64": "eyJvYXV0aDEiOnsi..."
-      }
-    }
-  }
-}
-```
-
-The environment variable wins when both are present, so Option B overrides a
-cached file rather than racing it. Note that anything in this block sits in a
-plaintext config file — the token grants full account access until it expires,
-so Option A is the better default.
-
-Restart Claude Desktop after editing. The tools appear under the plug icon.
-
-### If it doesn't connect
-
-- **Use an absolute path.** Claude Desktop does not run the server from your
-  project directory, so a relative path won't resolve.
-- **Run `npm run build` first.** The config points at `dist/stdio.js`, not the
-  TypeScript source.
-- **Check `node` is on the GUI PATH.** Claude Desktop launches with a minimal
-  environment, not your shell's. If `node` isn't found, use its full path
-  (`where node` on Windows, `which node` on macOS).
-- **Re-run `npm run auth`** if tools report that Garmin rejected the session.
+> Garmin accounts with two-factor authentication are not supported — the
+> underlying library cannot answer an MFA challenge.
 
 ## Try it
 
@@ -135,7 +85,7 @@ Four prompts that exercise the whole suite end to end:
 `download_activity_file`
 
 `create_workout`, `update_activity` and `download_activity_file` are marked as
-writes, so Claude Desktop will ask before running them.
+writes, so Claude Desktop asks before running them.
 
 Strength workouts check each exercise against a copy of Garmin's exercise
 catalog in `src/tools/exercise-catalog.ts`, because Garmin silently blanks a
@@ -146,25 +96,74 @@ run `node scripts/refresh-exercise-catalog.mjs path/to/Exercises.json`.
 ### What your device actually reports
 
 Garmin answers `200` with empty data for metrics your watch doesn't record,
-rather than an error. On this account, body battery and HRV come back empty on
-every date checked — the tools say so explicitly instead of returning a
-confident-looking zero.
+rather than an error. Body battery and HRV in particular come back empty on
+devices that don't measure them — the tools say so explicitly instead of
+returning a confident-looking zero.
+
+## Token in the environment instead of a file
+
+For machines where you'd rather not leave a token file, or where the server runs
+somewhere without your home directory. Use the `GARMIN_TOKENS_BASE64` value
+printed by `npx garmin-mcp-auth`.
+
+```json
+{
+  "mcpServers": {
+    "garmin": {
+      "command": "npx",
+      "args": ["-y", "garmin-mcp"],
+      "env": {
+        "GARMIN_TOKENS_BASE64": "eyJvYXV0aDEiOnsi..."
+      }
+    }
+  }
+}
+```
+
+The environment variable wins when both are present, so this overrides a cached
+file rather than racing it. Note that anything in this block sits in a plaintext
+config file, and the token grants full account access until it expires — the
+token file is the better default.
+
+## If it doesn't connect
+
+- **Check `node` is on the GUI PATH.** Claude Desktop launches with a minimal
+  environment, not your shell's. If `node` isn't found, use its full path
+  (`which node` on macOS, `where node` on Windows).
+- **Re-run `npx garmin-mcp-auth`** if tools report that Garmin rejected the
+  session. Tokens expire after about 30 days.
+- **Running from a clone?** Use an absolute path to `dist/stdio.js`, not a
+  relative one — Claude Desktop does not run the server from your project
+  directory — and run `npm run build` first.
+
+## Remote mode
+
+The same tools can run as a hosted connector for Claude web and mobile: a Vercel
+deployment with an OAuth 2.1 authorization server, Google sign-in, and Garmin
+tokens in Upstash Redis. Add one URL in Claude, sign in, and the tools appear.
+Supports multiple people on one deployment, each with their own Garmin account.
+
+Local stdio stays the simpler option and exposes nothing to the internet. See
+[DEPLOY.md](DEPLOY.md) for the hosted setup and its trade-offs.
 
 ## Development
 
 ```bash
+git clone https://github.com/AbhimanyuV04/garmin-mcp.git
+cd garmin-mcp
+npm install
 npm run build   # compile server and serverless handler
 npm test        # build, then run the assert-based checks
 ```
 
 Tokens live at `~/.garmin-mcp/tokens.json`, overridable with
-`GARMIN_TOKEN_PATH`. See `.env.example` for the full list of variables.
+`GARMIN_TOKEN_PATH`. See [.env.example](.env.example) for the full list of
+variables.
 
-## Remote mode
+## License
 
-The same tools can run as a hosted connector for Claude Web: a Vercel
-deployment with an OAuth 2.1 authorization server and Garmin tokens in Upstash
-Redis. Add one URL in Claude, log in, and the tools appear.
+MIT — see [LICENSE](LICENSE).
 
-Local stdio stays the simpler option and exposes nothing to the internet. See
-[DEPLOY.md](DEPLOY.md) for the hosted setup and its trade-offs.
+Not affiliated with or endorsed by Garmin. Uses the unofficial
+[garmin-connect](https://www.npmjs.com/package/garmin-connect) library, which
+talks to the same private API the Garmin Connect app uses.
